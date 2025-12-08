@@ -165,11 +165,14 @@ function startGpsTracking(map, H, H_inv) {
 // NOTE: Ensure the projectPoint, calculateHomographyMatrix, and the main 
 // event listener logic are also present in app.js!
 
+// Global variable to hold the map instance, allowing access/re-use
+let mapInstance = null; 
+
 // --- MAIN EXECUTION ---
 document.getElementById('loadMapButton').addEventListener('click', function() {
     const mapUrl = document.getElementById('mapUrl').value;
     
-    // 1. Collect real-world coordinates (P_real)
+    // 1. Collect real-world coordinates (P_real) (No change here)
     const P_real = [
         L.latLng(parseFloat(document.getElementById('lat1').value), parseFloat(document.getElementById('lon1').value)), 
         L.latLng(parseFloat(document.getElementById('lat2').value), parseFloat(document.getElementById('lon2').value)), 
@@ -177,19 +180,30 @@ document.getElementById('loadMapButton').addEventListener('click', function() {
         L.latLng(parseFloat(document.getElementById('lat4').value), parseFloat(document.getElementById('lon4').value))
     ];
 
-    // Initialize Map (If not already initialized) and Base Layer
-    let map = document.getElementById('map')._leaflet_id ? 
-              L.map('map') : 
-              L.map('map').setView(P_real[0], 13); // Center on P1 initially
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-
+    // --- CRITICAL FIX: Initialize Map ONLY ONCE ---
+    if (!mapInstance) {
+        // Initialize map only if it doesn't exist
+        mapInstance = L.map('map').setView(P_real[0], 13);
+        // Add the base tile layer only once
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapInstance);
+    }
+    
+    // Clear any previous overlays before loading new map
+    mapInstance.eachLayer(function (layer) {
+        if (layer.options && layer.options.attribution && layer.options.attribution.includes('Image Overlay')) {
+            mapInstance.removeLayer(layer);
+        }
+    });
 
     // 2. Get image dimensions and proceed (Requires an async load)
     const image = new Image();
+    
+    // Handle loading success
     image.onload = function() {
         const width = this.width;
         const height = this.height;
-
+        // ... rest of the matrix calculation (P_pixel, H, H_inv) is correct ...
+        
         // Define the image pixel coordinates (P_pixel)
         const P_pixel = [
             {x: 0, y: 0}, 
@@ -200,18 +214,22 @@ document.getElementById('loadMapButton').addEventListener('click', function() {
 
         // 3. Calculate Matrices
         const H = calculateHomographyMatrix(P_pixel, P_real);
-        const H_inv = numeric.inv(H); // Use numeric.js for the inverse
+        const H_inv = numeric.inv(H); 
 
-        // 4. Display the Unwarped Image
-        // Bounds are defined by P1 (top-left) and P3 (bottom-right)
+        // 4. Display the Unwarped Image using the mapInstance
         const bounds = L.latLngBounds(P_real[0], P_real[2]);
-        L.imageOverlay(mapUrl, bounds).addTo(map);
+        L.imageOverlay(mapUrl, bounds, { attribution: 'Custom Image Overlay' }).addTo(mapInstance);
 
-        // 5. Start Tracking, passing the required matrices
-        startGpsTracking(map, H, H_inv);
-        
-        // Fit map view to the newly loaded image bounds
-        map.fitBounds(bounds); 
+        // 5. Start Tracking
+        startGpsTracking(mapInstance, H, H_inv);
+        mapInstance.fitBounds(bounds); 
     };
-    image.src = mapUrl; // Start loading image to trigger onload
+
+    // Handle Image Loading Error (if URL is bad)
+    image.onerror = function() {
+        alert("Error loading map image. Please check the URL and ensure it is a public JPG/PNG image.");
+    };
+    
+    // Start loading the image
+    image.src = mapUrl; 
 });
