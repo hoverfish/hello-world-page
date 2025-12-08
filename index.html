@@ -12,7 +12,7 @@
 <body>
 
     <div class="container">
-        <h1>Maprika-Style GPS Overlay (V2.5.1)</h1>
+        <h1>Maprika-Style GPS Overlay (V2.6)</h1>
         <p>Use the Interactive Calibration to visually match the map corners.</p>
 
         <label for="mapUrl">Map Image URL (JPG/PNG):</label>
@@ -25,7 +25,16 @@
 
         <button id="startCalibrationButton">Start Interactive Calibration</button>
         <button id="confirmPointButton" style="display: none;">Confirm Point</button>
-        <hr style="margin-top: 20px;">
+        <hr style="margin-top: 15px;">
+        
+        <h3>Live Data & Controls</h3>
+        <div class="live-status-display" style="margin-bottom: 10px; font-size: 0.9em;">
+            <p>Zoom Level: <span id="zoomDisplay" style="font-weight: bold;">N/A</span></p>
+            <p id="coordDisplay">Coordinates: N/A</p>
+            <p id="controlPointInfo">Control Points: N/A</p>
+        </div>
+        
+        <button id="centerGpsButton" disabled style="margin-bottom: 15px;">Center Map on GPS</button>
         
         <div class="map-controls" style="margin-bottom: 10px;">
             <button id="toggleBaseMap" class="active-toggle" disabled>Base Map</button>
@@ -44,7 +53,7 @@
     <script>
     document.addEventListener('DOMContentLoaded', function() {
         
-        // --- START BUTTON ATTACHMENT (Moved from app.js) ---
+        // --- START BUTTON ATTACHMENT ---
         document.getElementById('startCalibrationButton').addEventListener('click', function() {
             const mapUrl = document.getElementById('mapUrl').value.trim();
 
@@ -54,14 +63,4 @@
             }
             
             // Calls the centralized setup function defined in app.js
-            initializeMapAndListeners(mapUrl); 
-        });
-
-        // --- TOGGLE AND CONFIRM BUTTON ATTACHMENTS (Moved from app.js) ---
-        document.getElementById('confirmPointButton').addEventListener('click', confirmCurrentPoint);
-        document.getElementById('toggleBaseMap').addEventListener('click', toggleToBaseMap);
-        document.getElementById('toggleImageMap').addEventListener('click', toggleToImageMap);
-    });
-    </script>
-</body>
-</html>
+            initialize
