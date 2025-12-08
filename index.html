@@ -12,7 +12,7 @@
 <body>
 
     <div class="container">
-        <h1>Maprika-Style GPS Overlay (V2.4)</h1>
+        <h1>Maprika-Style GPS Overlay (V2.5)</h1>
         <p>Use the Interactive Calibration to visually match the map corners.</p>
 
         <label for="mapUrl">Map Image URL (JPG/PNG):</label>
@@ -39,7 +39,29 @@
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/numeric/numeric-1.2.6.min.js"></script>
     
-    <script src="app.js"></script>
+    <script src="app.js"></script> 
+    
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        
+        // --- START BUTTON ATTACHMENT (Moved from app.js) ---
+        document.getElementById('startCalibrationButton').addEventListener('click', function() {
+            const mapUrl = document.getElementById('mapUrl').value.trim();
 
+            if (!mapUrl) {
+                alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
+                return; 
+            }
+            
+            // Calls the centralized setup function defined in app.js
+            initializeMapAndListeners(mapUrl); 
+        });
+
+        // --- TOGGLE AND CONFIRM BUTTON ATTACHMENTS (Moved from app.js) ---
+        document.getElementById('confirmPointButton').addEventListener('click', confirmCurrentPoint);
+        document.getElementById('toggleBaseMap').addEventListener('click', toggleToBaseMap);
+        document.getElementById('toggleImageMap').addEventListener('click', toggleToImageMap);
+    });
+    </script>
 </body>
 </html>
