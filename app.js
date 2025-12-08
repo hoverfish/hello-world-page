@@ -212,10 +212,12 @@ function runFinalProjection() {
 // --- MAIN EXECUTION AND SETUP PHASE ---
 
 document.getElementById('startCalibrationButton').addEventListener('click', function() {
-    const mapUrl = document.getElementById('mapUrl').value;
+    const mapUrl = document.getElementById('mapUrl').value.trim();
+
+    // --- CHECK 1: MISSING URL ---
     if (!mapUrl) {
-        alert("Please enter a Map Image URL.");
-        return;
+        alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
+        return; 
     }
 
     // Reset Map and State
@@ -238,6 +240,17 @@ document.getElementById('startCalibrationButton').addEventListener('click', func
     
     // 1. Load Image (to get dimensions)
     const image = new Image();
+    
+    // --- CHECK 2: INVALID URL / LOADING FAILURE ---
+    image.onerror = function() {
+        document.getElementById('status-message').innerHTML = 'Image loading failed.';
+        alert("❌ Error: Could not load the image from the provided URL. Please check the link and ensure the image is publicly accessible (JPG/PNG).");
+        // Remove the temporary map if loading fails before the map is fully set up
+        if (mapInstance) {
+            mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
+        }
+    };
+    
     image.onload = function() {
         const width = this.width;
         const height = this.height;
@@ -245,13 +258,12 @@ document.getElementById('startCalibrationButton').addEventListener('click', func
         calibrationPoints.imageDimensions = {width, height};
 
         // 2. Display the TEMPORARY image overlay with low opacity
-        // Use wide bounds to ensure the image is visible over the map area for initial setup
-        const tempBounds = L.latLngBounds([10, -180], [80, 180]); // Large temp bounds
+        const tempBounds = L.latLngBounds([10, -180], [80, 180]);
         
         calibrationPoints.mapImage = L.imageOverlay(mapUrl, tempBounds, {
             opacity: 0.5, 
             attribution: 'Calibration Image Overlay',
-            interactive: true // Ensure the overlay can block clicks if needed
+            interactive: true
         }).addTo(mapInstance);
         
         document.getElementById('status-message').innerHTML = `Image loaded (${width}x${height}). Click on the map to set **P1 (Top-Left corner)**.`;
@@ -261,9 +273,8 @@ document.getElementById('startCalibrationButton').addEventListener('click', func
         document.getElementById('confirmPointButton').style.display = 'none';
     };
     
-    image.onerror = () => alert("Error loading map image. Check URL.");
     image.src = mapUrl;
 });
 
-// Attach the confirm button handler
+// Attach the confirm button handler (Keep this line separate at the very end of app.js)
 document.getElementById('confirmPointButton').addEventListener('click', confirmCurrentPoint);
