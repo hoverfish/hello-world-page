@@ -1,4 +1,3 @@
-let userMarker = null; // Global variable to hold the GPS marker
 
 // --- GEOMETRY UTILITY FUNCTIONS ---
 
