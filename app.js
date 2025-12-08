@@ -3,19 +3,26 @@ let mapInstance = null;
 let userMarker = null; 
 let accuracyCircle = null; 
 
+// New Global Variables for Calibration State
+let calibrationPoints = {
+    currentStep: 1,      // 1 to 4
+    P_pixel: [],         // Stores {x, y} pixel coordinates from the image
+    P_real: [],          // Stores L.LatLng objects (real-world coordinates)
+    activeMarker: null,  // The draggable marker currently being adjusted
+    mapImage: null,      // Reference to the L.imageOverlay
+    imageDimensions: {}  // Stores {width, height} for final projection
+};
+
 // --- GEOMETRY UTILITY FUNCTIONS (No changes needed here) ---
 
-/**
- * Solves for the 3x3 Homography Matrix (H) using the 4 control points.
- */
 function calculateHomographyMatrix(P_pixel, P_real) {
     const A = [];
     const B = [];
     for (let i = 0; i < 4; i++) {
         const x_p = P_pixel[i].x;
         const y_p = P_pixel[i].y;
-        const x_r = P_real[i].lng; // Target X (Lon)
-        const y_r = P_real[i].lat; // Target Y (Lat)
+        const x_r = P_real[i].lng;
+        const y_r = P_real[i].lat;
 
         A.push([x_p, y_p, 1, 0, 0, 0, -x_r * x_p, -x_r * y_p]);
         B.push(x_r);
@@ -31,9 +38,6 @@ function calculateHomographyMatrix(P_pixel, P_real) {
     return H;
 }
 
-/**
- * Projects a point (x, y) using a 3x3 Homography Matrix (H).
- */
 function projectPoint(H, x, y) {
     const p = [x, y, 1];
     const p_prime = numeric.dot(H, p);
@@ -43,158 +47,223 @@ function projectPoint(H, x, y) {
     return [x_prime, y_prime];
 }
 
-// --- GPS TRACKING AND MAP LOGIC (Modified) ---
+// --- GPS TRACKING AND OPERATION PHASE ---
 
-/**
- * Initializes and continuously updates the user's position and accuracy circle 
- * using direct pixel coordinates on the L.CRS.Simple map.
- */
-function startGpsTracking(map, H_inv, meterToPixelScale) {
+function startGpsTracking(H_inv, mapUrl, meterToPixelScale) {
     if (!navigator.geolocation) {
-        alert("Geolocation is not supported by your browser. Cannot track position.");
+        alert("Geolocation is not supported by your browser.");
         return;
     }
+
+    // 1. REVERT to L.CRS.Simple for the final Image-Centric Display
+    mapInstance.options.crs = L.CRS.Simple;
     
+    // Clear ALL layers (base map, calibration markers, temp image)
+    mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
+    
+    // 2. Display the Final Unwarped Image using PIXEL BOUNDS
+    const {width, height} = calibrationPoints.imageDimensions;
+    const bounds = [[0, 0], [height, width]]; // [Y, X] order
+    L.imageOverlay(mapUrl, bounds, { attribution: 'Custom Image Overlay' }).addTo(mapInstance);
+    mapInstance.fitBounds(bounds); 
+    
+    // 3. Start GPS watch
     const watchOptions = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
 
     navigator.geolocation.watchPosition(
         (position) => {
             const currentLat = position.coords.latitude;
             const currentLon = position.coords.longitude;
-            const accuracy = position.coords.accuracy; // GPS accuracy in meters!
+            const accuracy = position.coords.accuracy;
             
-            // --- Step 1: Project GPS (Real World) to Pixels (Image Map) ---
-            // Use H_inv to find where this Lat/Lon lands on the UNWARPED image.
+            // Project GPS (Lon, Lat) to Image Pixels (X_px, Y_px)
             const [X_px, Y_px] = projectPoint(H_inv, currentLon, currentLat); 
-            
-            // Leaflet L.CRS.Simple expects coordinates in [Y, X] order (similar to [Lat, Lon])
-            const newPixelPoint = [Y_px, X_px]; 
+            const newPixelPoint = [Y_px, X_px]; // Leaflet L.CRS.Simple uses [Y, X]
             
             // Calculate accuracy radius in pixels
-            // This is an approximation and will only be accurate at one point/zoom level
             const pixelRadius = accuracy * meterToPixelScale; 
             
-            // --- Step 2: Update the Accuracy Circle ---
+            // Update Accuracy Circle
             if (accuracyCircle) {
                 accuracyCircle.setLatLng(newPixelPoint).setRadius(pixelRadius);
             } else {
                 accuracyCircle = L.circle(newPixelPoint, {
-                    radius: pixelRadius,
-                    color: '#888888',
-                    fillColor: '#888888',
-                    fillOpacity: 0.2,
-                    weight: 1 
-                }).addTo(map);
+                    radius: pixelRadius, color: 'gray', fillColor: '#888888', fillOpacity: 0.2, weight: 1 
+                }).addTo(mapInstance);
             }
 
-            // --- Step 3: Update the User Marker (Red Dot) ---
+            // Update User Marker
             if (userMarker) {
                 userMarker.setLatLng(newPixelPoint);
             } else {
                 userMarker = L.circleMarker(newPixelPoint, {
-                    radius: 8,
-                    color: 'red',
-                    fillColor: '#FF0000',
-                    fillOpacity: 1.0 
-                }).addTo(map);
+                    radius: 8, color: 'red', fillColor: '#FF0000', fillOpacity: 1.0 
+                }).addTo(mapInstance);
             }
             
             userMarker.bringToFront(); 
-
-            // Center map on the marker the first time (if not already centered)
-            if (map.getCenter().lat === 0 && map.getCenter().lng === 0) { 
-                 map.setView(newPixelPoint, map.getZoom() || 0);
+            // Center map on the marker the first time 
+            if (mapInstance.getCenter().lat === 0 && mapInstance.getCenter().lng === 0) { 
+                 mapInstance.setView(newPixelPoint, 0); // Zoom level 0 for initial view
             }
         },
-        (error) => {
-            console.error("Geolocation Error:", error);
-            if (error.code === error.PERMISSION_DENIED) {
-                 console.warn("Location permission denied by user.");
-            }
-        },
+        (error) => { console.error("Geolocation Error:", error); },
         watchOptions
     );
 }
 
-// --- MAIN EXECUTION (Modified) ---
-document.getElementById('loadMapButton').addEventListener('click', function() {
-    const mapUrl = document.getElementById('mapUrl').value;
-    
-    // 1. Collect real-world coordinates (P_real)
-    const P_real = [
-        L.latLng(parseFloat(document.getElementById('lat1').value), parseFloat(document.getElementById('lon1').value)), 
-        L.latLng(parseFloat(document.getElementById('lat2').value), parseFloat(document.getElementById('lon2').value)), 
-        L.latLng(parseFloat(document.getElementById('lat3').value), parseFloat(document.getElementById('lon3').value)), 
-        L.latLng(parseFloat(document.getElementById('lat4').value), parseFloat(document.getElementById('lon4').value))
-    ];
+// --- CALIBRATION PHASE FUNCTIONS ---
 
-    // 2. CRITICAL FIX: Initialize Map ONLY ONCE using L.CRS.Simple
-    if (!mapInstance) {
-        mapInstance = L.map('map', {
-            crs: L.CRS.Simple,
-            minZoom: -5,
-            maxZoom: 5,
-            scrollWheelZoom: true
-        }).setView([0, 0], 0); // Center at pixel 0,0 with zoom 0
+function handleMapClick(e) {
+    const step = calibrationPoints.currentStep;
+    
+    if (calibrationPoints.activeMarker) {
+         // Should not happen if confirmed button is used, but good safeguard
+         return; 
     }
     
-    // Clear any previous overlays
-    mapInstance.eachLayer(function (layer) {
-        if (layer.options && layer.options.attribution && layer.options.attribution.includes('Overlay')) {
-            mapInstance.removeLayer(layer);
-        }
-    });
+    // Stop listening for new clicks until the current point is confirmed
+    mapInstance.off('click', handleMapClick); 
 
-    // 3. Get image dimensions and proceed (Requires an async load)
-    const image = new Image();
+    // 1. Create a draggable marker at the clicked LatLng
+    const newMarker = L.marker(e.latlng, {
+        draggable: true,
+        title: `P${step}`,
+        icon: L.divIcon({className: 'calibration-marker', html: `<b>P${step}</b>`})
+    }).addTo(mapInstance);
+
+    calibrationPoints.activeMarker = newMarker;
+
+    // 2. Set up the drag listener
+    newMarker.on('dragend', function() {
+        document.getElementById('status-message').innerHTML = `P${step} position updated. Click **Confirm Point** to finalize.`;
+    });
     
-    // Handle loading success
+    // 3. Update status and show the confirmation button
+    document.getElementById('status-message').innerHTML = `P${step} set. Drag the marker to adjust, then click **Confirm Point**.`;
+    document.getElementById('confirmPointButton').style.display = 'inline';
+}
+
+function confirmCurrentPoint() {
+    const step = calibrationPoints.currentStep;
+    const marker = calibrationPoints.activeMarker;
+    if (!marker) return;
+
+    // 1. Store the final REAL-WORLD (LatLng) coordinate
+    const finalLatLng = marker.getLatLng();
+    calibrationPoints.P_real.push(finalLatLng);
+
+    // 2. Calculate and store the PIXEL coordinate
+    // The LatLng must be converted to a pixel point relative to the image's top-left corner
+    const mapBounds = calibrationPoints.mapImage.getBounds();
+    const pixelPoint = mapInstance.latLngToContainerPoint(finalLatLng);
+    
+    // Normalize the pixel coordinate relative to the top-left of the image overlay
+    const imageTopLeftPixel = mapInstance.latLngToContainerPoint(mapBounds.getNorthWest());
+    
+    const x_px = pixelPoint.x - imageTopLeftPixel.x;
+    const y_px = pixelPoint.y - imageTopLeftPixel.y;
+    
+    // IMPORTANT: Leaflet's imageOverlay assumes its corners map to the real-world corners
+    // This calculation ensures that clicks relative to the image itself are recorded correctly.
+    calibrationPoints.P_pixel.push({x: x_px, y: y_px});
+
+    // 3. Cleanup marker and advance
+    marker.dragging.disable();
+    document.getElementById('confirmPointButton').style.display = 'none';
+    calibrationPoints.activeMarker = null; // Clear the active marker
+    
+    // Remove the temporary visual marker now that the point is stored
+    mapInstance.removeLayer(marker); 
+    
+    calibrationPoints.currentStep++;
+    
+    if (calibrationPoints.currentStep <= 4) {
+        // Continue to the next point
+        document.getElementById('status-message').innerHTML = `**P${step}** confirmed. Click on the map to set **P${calibrationPoints.currentStep}**.`;
+        mapInstance.on('click', handleMapClick); // Re-enable clicks
+    } else {
+        // All 4 points collected! Final step.
+        document.getElementById('status-message').innerHTML = 'Calibration complete! Calculating projection...';
+        runFinalProjection(); 
+    }
+}
+
+function runFinalProjection() {
+    const { P_pixel, P_real, imageDimensions } = calibrationPoints;
+    
+    // 1. Calculate Matrices
+    const H = calculateHomographyMatrix(P_pixel, P_real);
+    const H_inv = numeric.inv(H); 
+    
+    // 2. Calculate Meter-to-Pixel Scale Factor
+    // Used to convert GPS accuracy (in meters) to pixel radius on the map.
+    const longestSidePixel = Math.max(imageDimensions.width, imageDimensions.height);
+    const P1 = P_real[0];
+    const P2 = P_real[1];
+    // Use the distance between two corners for scale reference
+    const realWorldDistance = P1.distanceTo(P2); 
+    const meterToPixelScale = longestSidePixel / realWorldDistance;
+    
+    // 3. Start the final tracking phase
+    startGpsTracking(H_inv, document.getElementById('mapUrl').value, meterToPixelScale);
+}
+
+// --- MAIN EXECUTION AND SETUP PHASE ---
+
+document.getElementById('startCalibrationButton').addEventListener('click', function() {
+    const mapUrl = document.getElementById('mapUrl').value;
+    if (!mapUrl) {
+        alert("Please enter a Map Image URL.");
+        return;
+    }
+
+    // Reset Map and State
+    if (!mapInstance) {
+        // Initialize map with default Geographic CRS (EPSG:3857) for calibration
+        mapInstance = L.map('map').setView([40.7, -74.0], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapInstance);
+    } else {
+        // Clean up previous runs
+        mapInstance.options.crs = L.CRS.EPSG3857;
+        mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapInstance);
+    }
+    
+    // Reset calibration state
+    calibrationPoints = { 
+        currentStep: 1, P_pixel: [], P_real: [], activeMarker: null, mapImage: null, imageDimensions: {}
+    };
+    document.getElementById('status-message').innerHTML = 'Loading image...';
+    
+    // 1. Load Image (to get dimensions)
+    const image = new Image();
     image.onload = function() {
         const width = this.width;
         const height = this.height;
-        
-        // Define the image pixel coordinates (P_pixel)
-        const P_pixel = [
-            {x: 0, y: 0}, 
-            {x: width, y: 0}, 
-            {x: width, y: height}, 
-            {x: 0, y: height}
-        ];
 
-        // 4. Calculate Matrices
-        const H = calculateHomographyMatrix(P_pixel, P_real);
-        const H_inv = numeric.inv(H); 
-        
-        // 5. Calculate Meter-to-Pixel Scale Factor (Approximation)
-        // This is a necessary step for L.CRS.Simple to display the accuracy circle correctly.
-        // We calculate the pixel distance of the longest side and divide by the real-world distance.
-        const longestSidePixel = Math.max(width, height);
-        const P1 = P_real[0];
-        const P2 = P_real[1];
-        // Approximate distance function (Leaflet's distanceTo uses meters)
-        const realWorldDistance = P1.distanceTo(P2); 
-        const meterToPixelScale = longestSidePixel / realWorldDistance;
-        
+        calibrationPoints.imageDimensions = {width, height};
 
-        // 6. Display the Unwarped Image using PIXEL BOUNDS
-        // Bounds are defined in [Y, X] order: [[minY, minX], [maxY, maxX]]
-        const bounds = [[0, 0], [height, width]];
-        L.imageOverlay(mapUrl, bounds, { 
-            attribution: 'Custom Image Overlay',
-            opacity: 1.0,
-            interactive: false
+        // 2. Display the TEMPORARY image overlay with low opacity
+        // Use wide bounds to ensure the image is visible over the map area for initial setup
+        const tempBounds = L.latLngBounds([10, -180], [80, 180]); // Large temp bounds
+        
+        calibrationPoints.mapImage = L.imageOverlay(mapUrl, tempBounds, {
+            opacity: 0.5, 
+            attribution: 'Calibration Image Overlay',
+            interactive: true // Ensure the overlay can block clicks if needed
         }).addTo(mapInstance);
-
-        // 7. Start Tracking
-        startGpsTracking(mapInstance, H_inv, meterToPixelScale);
-        mapInstance.fitBounds(bounds); 
-    };
-
-    // Handle Image Loading Error
-    image.onerror = function() {
-        alert("Error loading map image. Please check the URL and ensure it is a public JPG/PNG image.");
+        
+        document.getElementById('status-message').innerHTML = `Image loaded (${width}x${height}). Click on the map to set **P1 (Top-Left corner)**.`;
+        
+        // 3. Start listening for clicks
+        mapInstance.on('click', handleMapClick);
+        document.getElementById('confirmPointButton').style.display = 'none';
     };
     
-    // Start loading the image
-    image.src = mapUrl; 
+    image.onerror = () => alert("Error loading map image. Check URL.");
+    image.src = mapUrl;
 });
+
+// Attach the confirm button handler
+document.getElementById('confirmPointButton').addEventListener('click', confirmCurrentPoint);

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Static Maprika Clone V1</title>
+    <title>Maprika Clone V2: Interactive Calibration</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     
@@ -12,42 +12,20 @@
 <body>
 
     <div class="container">
-        <h1>Maprika-Style GPS Overlay (V1.02)</h1>
-        <p>Input a public image URL and the real-world coordinates for the four corners (P1-P4).</p>
+        <h1>Maprika-Style GPS Overlay (V2)</h1>
+        <p>Use the Interactive Calibration to set your map corners visually.</p>
 
         <label for="mapUrl">Map Image URL (JPG/PNG):</label>
-        <input type="url" id="mapUrl" value="https://preview.redd.it/27-ideas-to-improve-davis-square-v0-ct27i71tqznf1.png?auto=webp&s=a17ba02a689980c62ec63d1459af805dfa7c369b" required>
+        <input type="url" id="mapUrl" placeholder="e.g., https://example.com/map.jpg" required>
         
-        <h3>Control Points (P1: Top-Left, P2: Top-Right, P3: Bottom-Right, P4: Bottom-Left)</h3>
-        
-        <div id="coords-input-group">
-            <fieldset>
-                <legend>P1</legend>
-                <label>Lat:</label><input type="number" step="any" id="lat1" value="42.3967" required>
-                <label>Lon:</label><input type="number" step="any" id="lon1" value="-71.1252" required>
-            </fieldset>
-
-            <fieldset>
-                <legend>P2</legend>
-                <label>Lat:</label><input type="number" step="any" id="lat2" value="42.3967" required>
-                <label>Lon:</label><input type="number" step="any" id="lon2" value="-71.1235" required>
-            </fieldset>
-
-            <fieldset>
-                <legend>P3</legend>
-                <label>Lat:</label><input type="number" step="any" id="lat3" value="42.3909" required>
-                <label>Lon:</label><input type="number" step="any" id="lon3" value="-71.1235" required>
-            </fieldset>
-
-            <fieldset>
-                <legend>P4</legend>
-                <label>Lat:</label><input type="number" step="any" id="lat4" value="42.3909" required>
-                <label>Lon:</label><input type="number" step="any" id="lon4" value="-71.1252" required>
-            </fieldset>
+        <h3>Calibration Status:</h3>
+        <div id="status-message" style="min-height: 20px; font-weight: bold; margin-bottom: 10px;">
+            <p>Enter Map URL above and click 'Start Calibration'.</p>
         </div>
 
-        <button id="loadMapButton">Load Map and Start Tracking</button>
-    </div>
+        <button id="startCalibrationButton">Start Interactive Calibration</button>
+        <button id="confirmPointButton" style="display: none;">Confirm Point</button>
+        </div>
 
     <div id="map"></div> 
 
