@@ -73,52 +73,97 @@ function projectPoint(H, x, y) {
 
 // --- GPS TRACKING AND MAP LOGIC ---
 
+// Global variables to hold the marker and the accuracy circle
+let userMarker = null; 
+let accuracyCircle = null; 
+
+/**
+ * Initializes and continuously updates the user's position and accuracy circle.
+ * The position is projected onto the unwarped custom map image.
+ * * @param {object} map - The Leaflet map instance.
+ * @param {Array} H - The 3x3 Forward Homography Matrix (Pixel -> Real World).
+ * @param {Array} H_inv - The 3x3 Inverse Homography Matrix (Real World -> Pixel).
+ */
 function startGpsTracking(map, H, H_inv) {
     if (!navigator.geolocation) {
         alert("Geolocation is not supported by your browser. Cannot track position.");
         return;
     }
+    
+    // Set up options for tracking
+    const watchOptions = { 
+        enableHighAccuracy: true, 
+        timeout: 10000, 
+        maximumAge: 0 
+    };
 
     navigator.geolocation.watchPosition(
         (position) => {
             const currentLat = position.coords.latitude;
             const currentLon = position.coords.longitude;
+            const accuracy = position.coords.accuracy; // GPS accuracy in meters!
             
             // --- Step 1: Project GPS (Real World) to Pixels (Image Map) ---
             // Use H_inv to find where this Lat/Lon lands on the UNWARPED image.
-            // Result is [X_pixel, Y_pixel]
+            // Remember: projectPoint uses [x, y], so we use [Lon, Lat]
             const [X_px, Y_px] = projectPoint(H_inv, currentLon, currentLat); 
             
             // --- Step 2: Project Pixels back to Lat/Lon for Leaflet ---
-            // We use the original forward matrix (H) to find the precise 
-            // Lat/Lon coordinate that corresponds to this calculated pixel location.
-            // Result is [Lon_marker, Lat_marker]
+            // Use the forward matrix (H) to find the precise Lat/Lon that 
+            // corresponds to this calculated pixel location on the map.
             const [Lon_marker, Lat_marker] = projectPoint(H, X_px, Y_px);
 
             const newLatLng = L.latLng(Lat_marker, Lon_marker);
 
-            // --- Step 3: Update the Marker ---
+            // --- Step 3: Update the Accuracy Circle ---
+            if (accuracyCircle) {
+                // If the circle exists, just update its position and radius
+                accuracyCircle.setLatLng(newLatLng).setRadius(accuracy);
+            } else {
+                // If this is the first update, create the circle
+                accuracyCircle = L.circle(newLatLng, {
+                    radius: accuracy, // Set radius to the reported accuracy (in meters)
+                    color: '#888888',
+                    fillColor: '#888888',
+                    fillOpacity: 0.2, // Semi-transparent fill
+                    weight: 1 
+                }).addTo(map);
+            }
+
+            // --- Step 4: Update the User Marker (the Red Dot) ---
             if (userMarker) {
                 userMarker.setLatLng(newLatLng);
             } else {
+                // Create the red dot
                 userMarker = L.circleMarker(newLatLng, {
                     radius: 8,
-                    color: 'red', // Use a high-contrast color
+                    color: 'red',
                     fillColor: '#FF0000',
                     fillOpacity: 1.0 
                 }).addTo(map);
-                
-                // Center the map on the marker's calculated location
-                map.setView(newLatLng, 15); 
+            }
+            
+            // Ensure the dot is always drawn *on top* of the circle
+            userMarker.bringToFront(); 
+
+            // Optional: Center the map on the marker the first time
+            if (!map.getCenter().lat) { 
+                 map.setView(newLatLng, map.getZoom() || 15);
             }
         },
         (error) => {
             console.error("Geolocation Error:", error);
-            // Ignore position unavailable errors if map is loaded
+            // Inform the user, but don't halt the application
+            if (error.code === error.PERMISSION_DENIED) {
+                 console.warn("Location permission denied by user.");
+            }
         },
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        watchOptions
     );
 }
+
+// NOTE: Ensure the projectPoint, calculateHomographyMatrix, and the main 
+// event listener logic are also present in app.js!
 
 // --- MAIN EXECUTION ---
 document.getElementById('loadMapButton').addEventListener('click', function() {
