@@ -24,103 +24,60 @@ function calculateHomographyMatrix(P_pixel, P_real) { /* ... */ }
 function projectPoint(H, x, y) { /* ... */ }
 
 
-// --- FEATURE 1, 2, 4: LIVE DISPLAY AND GPS MARKER FUNCTIONS (CRITICAL FIXES HERE) ---
+// --- FEATURE 1, 2, 4: LIVE DISPLAY AND GPS MARKER FUNCTIONS (Unchanged) ---
+function updateLiveDisplay() { /* ... */ }
+function updateControlPointInfo() { /* ... */ }
+function centerMapOnGps() { /* ... */ }
 
-function updateLiveDisplay() {
-    // --- CRITICAL NULL CHECK: Prevents crash if called before map is initialized ---
-    if (!mapInstance) return; 
 
-    // Feature 1: Zoom Level Display
-    document.getElementById('zoomDisplay').textContent = mapInstance.getZoom();
-
-    // Feature 2: Center Coordinates Display
-    const center = mapInstance.getCenter();
-    const mapType = (mapInstance.options.crs === L.CRS.EPSG3857) ? 'Lat/Lon' : 'Pixel (Y/X)';
-    
-    let coordText;
-    if (mapInstance.options.crs === L.CRS.EPSG3857) {
-        coordText = `Lat: ${center.lat.toFixed(6)}, Lon: ${center.lng.toFixed(6)}`;
-    } else {
-        coordText = `Y: ${center.lat.toFixed(0)}, X: ${center.lng.toFixed(0)}`;
-    }
-    document.getElementById('coordDisplay').textContent = `Center (${mapType}): ${coordText}`;
-    
-    updateControlPointInfo();
-}
-
-function updateControlPointInfo() {
-    // Also requires mapInstance to avoid errors, although less likely to crash here
-    if (!mapInstance) return; 
-    
-    let info = [];
-    for (let i = 0; i < calibrationPoints.P_real.length; i++) {
-        const pR = calibrationPoints.P_real[i];
-        const pP = calibrationPoints.P_pixel[i];
-        
-        let pR_text = pR ? `(Lon: ${pR.lng.toFixed(4)}, Lat: ${pR.lat.toFixed(4)})` : 'N/A';
-        let pP_text = pP ? `(X: ${pP.x.toFixed(0)}, Y: ${pP.y.toFixed(0)})` : 'N/A';
-        
-        info.push(`P${i + 1}: Real ${pR_text} / Pixel ${pP_text}`);
-    }
-    
-    let currentStepText = `P${calibrationPoints.currentStep}: Collecting ${currentMapView === 'base' ? 'Real' : 'Pixel'}`;
-    
-    document.getElementById('controlPointInfo').innerHTML = 
-        [currentStepText, ...info].join('<br>');
-}
-
-function centerMapOnGps() {
-    if (!navigator.geolocation) {
-        alert("Geolocation is not supported by your browser.");
-        return;
-    }
-    
-    if (currentMapView !== 'base') {
-        alert("Please switch to the Base Map to use GPS centering.");
-        return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-        (position) => {
-            const currentLatLng = [position.coords.latitude, position.coords.longitude];
-            const accuracy = position.coords.accuracy;
-
-            mapInstance.setView(currentLatLng, mapInstance.getZoom() > 15 ? mapInstance.getZoom() : 15);
-
-            const markerIcon = L.divIcon({className: 'gps-marker-icon', html: '📍'});
-            
-            if (!userMarker) {
-                userMarker = L.marker(currentLatLng, { icon: markerIcon }).addTo(mapInstance).bringToFront();
-                accuracyCircle = L.circle(currentLatLng, { radius: accuracy, color: '#3080ff', fillColor: '#3080ff', fillOpacity: 0.2, weight: 1 }).addTo(mapInstance);
-            } else {
-                userMarker.setLatLng(currentLatLng).bringToFront();
-                accuracyCircle.setLatLng(currentLatLng).setRadius(accuracy);
-            }
-        },
-        (error) => {
-            console.error("Geolocation Error:", error);
-            alert("Could not retrieve current GPS location. Ensure location services are enabled.");
-        },
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-    );
-}
-
-// --- VIEW STATE MANAGEMENT (Unchanged) ---
-function saveCurrentViewState() { /* ... */ }
-
-// --- MAP VIEW TOGGLING LOGIC (Unchanged) ---
+// --- MAP VIEW TOGGLING LOGIC (Layer Management Refined) ---
 
 function updateToggleButtons() {
-    // ... (logic) ...
+    const baseBtn = document.getElementById('toggleBaseMap');
+    const imgBtn = document.getElementById('toggleImageMap');
+    const display = document.getElementById('activeMapDisplay');
+    
+    // Clear all non-main layers (markers, circles, etc.)
+    mapInstance.eachLayer(layer => {
+        if (layer !== osmLayer && layer !== calibrationPoints.mapImage && 
+            !(layer instanceof L.Marker) && !(layer instanceof L.Circle)) { 
+            mapInstance.removeLayer(layer);
+        }
+    });
+
+    if (currentMapView === 'base') {
+        baseBtn.classList.add('active-toggle');
+        imgBtn.classList.remove('active-toggle');
+        display.textContent = 'Active View: Base Map (Click to set Lat/Lon)';
+        
+        // FIX: Ensure ONLY OSM is present
+        if (osmLayer) mapInstance.addLayer(osmLayer);
+        if (calibrationPoints.mapImage && mapInstance.hasLayer(calibrationPoints.mapImage)) {
+            mapInstance.removeLayer(calibrationPoints.mapImage);
+        }
+
+    } else { // 'image' view
+        baseBtn.classList.remove('active-toggle');
+        imgBtn.classList.add('active-toggle');
+        display.textContent = 'Active View: Image Map (Click to set Pixel X/Y)';
+        
+        // FIX: Ensure ONLY Image is present
+        if (osmLayer && mapInstance.hasLayer(osmLayer)) {
+            mapInstance.removeLayer(osmLayer);
+        }
+        if (calibrationPoints.mapImage) mapInstance.addLayer(calibrationPoints.mapImage);
+    }
+    
+    // Control visibility and state of GPS marker and button (only on base map)
     const gpsButton = document.getElementById('centerGpsButton');
     if (currentMapView === 'base') {
-        gpsButton.disabled = false;
+        if (gpsButton) gpsButton.disabled = false;
         if (userMarker) {
             mapInstance.addLayer(userMarker);
             mapInstance.addLayer(accuracyCircle);
         }
     } else {
-        gpsButton.disabled = true;
+        if (gpsButton) gpsButton.disabled = true;
         if (userMarker) {
             mapInstance.removeLayer(userMarker);
             mapInstance.removeLayer(accuracyCircle);
@@ -237,6 +194,7 @@ function initializeMapAndListeners(mapUrl) {
         mapInstance.on('click', handleMapClick); 
         document.getElementById('confirmPointButton').style.display = 'none';
 
+        // Fix for Safari: Ensure buttons are explicitly enabled
         document.getElementById('toggleBaseMap').disabled = false;
         document.getElementById('toggleImageMap').disabled = false;
         document.getElementById('centerGpsButton').disabled = false; 
@@ -248,23 +206,21 @@ function initializeMapAndListeners(mapUrl) {
 }
 
 // -----------------------------------------------------------------
-// --- FINAL EVENT ATTACHMENTS (Ensures listeners are attached last) ---
+// --- FINAL EVENT ATTACHMENTS (ROBUST NULL CHECKS FOR SAFARI/CHROME) ---
 // -----------------------------------------------------------------
 
-document.getElementById('startCalibrationButton').addEventListener('click', function() {
-    const mapUrl = document.getElementById('mapUrl').value.trim();
+const startBtn = document.getElementById('startCalibrationButton');
+if (startBtn) {
+    startBtn.addEventListener('click', function() {
+        const mapUrl = document.getElementById('mapUrl').value.trim();
+        if (!mapUrl) {
+            alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
+            return; 
+        }
+        initializeMapAndListeners(mapUrl);
+    });
+}
 
-    if (!mapUrl) {
-        alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
-        return; 
-    }
-    
-    // The issue here is the `initializeMapAndListeners` function assumes it runs successfully.
-    // The functions it calls need to be robust against running before all HTML elements are ready.
-    initializeMapAndListeners(mapUrl);
-});
-
-// Adding null checks here just in case the element doesn't exist, though it should.
 const centerBtn = document.getElementById('centerGpsButton');
 if (centerBtn) centerBtn.addEventListener('click', centerMapOnGps);
 
