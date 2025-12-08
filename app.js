@@ -23,37 +23,43 @@ let calibrationPoints = {
 function calculateHomographyMatrix(P_pixel, P_real) { /* ... */ }
 function projectPoint(H, x, y) { /* ... */ }
 
-
-// --- FEATURE 1, 2, 4: LIVE DISPLAY AND GPS MARKER FUNCTIONS (Unchanged) ---
+// --- LIVE DISPLAY & GPS FUNCTIONS (Unchanged) ---
 function updateLiveDisplay() { /* ... */ }
 function updateControlPointInfo() { /* ... */ }
 function centerMapOnGps() { /* ... */ }
+function saveCurrentViewState() { /* ... */ }
 
 
-// --- MAP VIEW TOGGLING LOGIC (Layer Management Refined) ---
+// --- MAP VIEW TOGGLING LOGIC (HARD RESET IMPLEMENTED) ---
 
 function updateToggleButtons() {
     const baseBtn = document.getElementById('toggleBaseMap');
     const imgBtn = document.getElementById('toggleImageMap');
     const display = document.getElementById('activeMapDisplay');
-    
-    // Clear all non-main layers (markers, circles, etc.)
+
+    // 1. Clear Map of ALL layers EXCEPT active marker and calibration points
     mapInstance.eachLayer(layer => {
-        if (layer !== osmLayer && layer !== calibrationPoints.mapImage && 
-            !(layer instanceof L.Marker) && !(layer instanceof L.Circle)) { 
+        if (layer !== calibrationPoints.activeMarker && 
+            !(layer instanceof L.Marker)) { 
             mapInstance.removeLayer(layer);
         }
     });
-
+    
+    // 2. Control visibility and state of GPS marker and button
+    const gpsButton = document.getElementById('centerGpsButton');
+    
     if (currentMapView === 'base') {
         baseBtn.classList.add('active-toggle');
         imgBtn.classList.remove('active-toggle');
         display.textContent = 'Active View: Base Map (Click to set Lat/Lon)';
         
-        // FIX: Ensure ONLY OSM is present
+        // FIX: Add Base Map Layer
         if (osmLayer) mapInstance.addLayer(osmLayer);
-        if (calibrationPoints.mapImage && mapInstance.hasLayer(calibrationPoints.mapImage)) {
-            mapInstance.removeLayer(calibrationPoints.mapImage);
+        
+        if (gpsButton) gpsButton.disabled = false;
+        if (userMarker) {
+            mapInstance.addLayer(userMarker);
+            mapInstance.addLayer(accuracyCircle);
         }
 
     } else { // 'image' view
@@ -61,27 +67,19 @@ function updateToggleButtons() {
         imgBtn.classList.add('active-toggle');
         display.textContent = 'Active View: Image Map (Click to set Pixel X/Y)';
         
-        // FIX: Ensure ONLY Image is present
-        if (osmLayer && mapInstance.hasLayer(osmLayer)) {
-            mapInstance.removeLayer(osmLayer);
-        }
+        // FIX: Add Image Map Layer
         if (calibrationPoints.mapImage) mapInstance.addLayer(calibrationPoints.mapImage);
-    }
-    
-    // Control visibility and state of GPS marker and button (only on base map)
-    const gpsButton = document.getElementById('centerGpsButton');
-    if (currentMapView === 'base') {
-        if (gpsButton) gpsButton.disabled = false;
-        if (userMarker) {
-            mapInstance.addLayer(userMarker);
-            mapInstance.addLayer(accuracyCircle);
-        }
-    } else {
+        
         if (gpsButton) gpsButton.disabled = true;
         if (userMarker) {
             mapInstance.removeLayer(userMarker);
             mapInstance.removeLayer(accuracyCircle);
         }
+    }
+    
+    // Ensure active marker is brought to the top (if one exists)
+    if (calibrationPoints.activeMarker) {
+         calibrationPoints.activeMarker.addTo(mapInstance).bringToFront();
     }
     
     mapInstance.invalidateSize(); 
@@ -92,11 +90,13 @@ function toggleToBaseMap() {
     
     saveCurrentViewState();
 
+    // HARD RESET: Change CRS and immediately update layers
     mapInstance.options.crs = L.CRS.EPSG3857;
     currentMapView = 'base';
     updateToggleButtons();
+
     mapInstance.setView(baseMapViewState.center, baseMapViewState.zoom);
-    updateLiveDisplay(); 
+    updateLiveDisplay();
 }
 
 function toggleToImageMap() {
@@ -104,6 +104,7 @@ function toggleToImageMap() {
     
     saveCurrentViewState();
     
+    // HARD RESET: Change CRS and immediately update layers
     mapInstance.options.crs = L.CRS.Simple;
     
     if (calibrationPoints.mapImage) {
@@ -121,8 +122,7 @@ function toggleToImageMap() {
 
     currentMapView = 'image';
     updateToggleButtons();
-    mapInstance.setView(imageMapViewState.center, imageMapViewState.zoom);
-    updateLiveDisplay(); 
+    updateLiveDisplay();
 }
 
 
@@ -132,7 +132,7 @@ function confirmCurrentPoint() { /* ... */ }
 function runFinalProjection() { /* ... */ } 
 
 
-// --- MAIN EXECUTION AND SETUP PHASE ---
+// --- MAIN EXECUTION AND SETUP PHASE (Atomic Initialization) ---
 
 function initializeMapAndListeners(mapUrl) {
     // 1. Initialize map and layers
@@ -194,10 +194,25 @@ function initializeMapAndListeners(mapUrl) {
         mapInstance.on('click', handleMapClick); 
         document.getElementById('confirmPointButton').style.display = 'none';
 
-        // Fix for Safari: Ensure buttons are explicitly enabled
+        // 5. ATOMIC BUTTON ENABLE/ATTACHMENT (CRITICAL FOR SAFARI STABILITY)
+        
+        // Enable buttons
         document.getElementById('toggleBaseMap').disabled = false;
         document.getElementById('toggleImageMap').disabled = false;
         document.getElementById('centerGpsButton').disabled = false; 
+        
+        // Attach listeners ONLY AFTER the map and buttons are verified enabled
+        const centerBtn = document.getElementById('centerGpsButton');
+        if (centerBtn) centerBtn.addEventListener('click', centerMapOnGps);
+
+        const confirmBtn = document.getElementById('confirmPointButton');
+        if (confirmBtn) confirmBtn.addEventListener('click', confirmCurrentPoint);
+
+        const toggleBaseBtn = document.getElementById('toggleBaseMap');
+        if (toggleBaseBtn) toggleBaseBtn.addEventListener('click', toggleToBaseMap);
+
+        const toggleImageBtn = document.getElementById('toggleImageMap');
+        if (toggleImageBtn) toggleImageBtn.addEventListener('click', toggleToImageMap);
 
         updateLiveDisplay(); 
     };
@@ -206,7 +221,7 @@ function initializeMapAndListeners(mapUrl) {
 }
 
 // -----------------------------------------------------------------
-// --- FINAL EVENT ATTACHMENTS (ROBUST NULL CHECKS FOR SAFARI/CHROME) ---
+// --- FINAL EVENT ATTACHMENTS (Only Start Button remains here) ---
 // -----------------------------------------------------------------
 
 const startBtn = document.getElementById('startCalibrationButton');
@@ -221,14 +236,4 @@ if (startBtn) {
     });
 }
 
-const centerBtn = document.getElementById('centerGpsButton');
-if (centerBtn) centerBtn.addEventListener('click', centerMapOnGps);
-
-const confirmBtn = document.getElementById('confirmPointButton');
-if (confirmBtn) confirmBtn.addEventListener('click', confirmCurrentPoint);
-
-const toggleBaseBtn = document.getElementById('toggleBaseMap');
-if (toggleBaseBtn) toggleBaseBtn.addEventListener('click', toggleToBaseMap);
-
-const toggleImageBtn = document.getElementById('toggleImageMap');
-if (toggleImageBtn) toggleImageBtn.addEventListener('click', toggleToImageMap);
+// NOTE: All other button attachments were moved into the image.onload success block.
