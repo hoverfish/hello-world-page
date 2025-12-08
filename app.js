@@ -19,7 +19,7 @@ let calibrationPoints = {
     imageDimensions: {}  // Stores {width, height}
 };
 
-// --- GEOMETRY UTILITY FUNCTIONS (No changes) ---
+// --- GEOMETRY UTILITY FUNCTIONS (Unchanged) ---
 
 function calculateHomographyMatrix(P_pixel, P_real) {
     const A = [];
@@ -53,6 +53,26 @@ function projectPoint(H, x, y) {
     return [x_prime, y_prime];
 }
 
+// --- VIEW STATE MANAGEMENT (Synchronization Fix) ---
+
+function saveCurrentViewState() {
+    if (!mapInstance) return;
+
+    // Check which CRS is currently active to determine which state to save
+    if (mapInstance.options.crs === L.CRS.EPSG3857) {
+        // Only save valid geographic coordinates
+        const center = mapInstance.getCenter();
+        if (center.lat > -90 && center.lat < 90) {
+            baseMapViewState.center = center;
+            baseMapViewState.zoom = mapInstance.getZoom();
+        }
+    } else if (mapInstance.options.crs === L.CRS.Simple) {
+        // Save simple pixel coordinates
+        imageMapViewState.center = mapInstance.getCenter();
+        imageMapViewState.zoom = mapInstance.getZoom();
+    }
+}
+
 // --- MAP VIEW TOGGLING LOGIC (The Decoupling Fix) ---
 
 function updateToggleButtons() {
@@ -60,10 +80,10 @@ function updateToggleButtons() {
     const imgBtn = document.getElementById('toggleImageMap');
     const display = document.getElementById('activeMapDisplay');
     
-    // Clear the map of layers for strict control
+    // Clear the map of extra layers for strict control
     mapInstance.eachLayer(layer => {
         if (layer !== osmLayer && layer !== calibrationPoints.mapImage && 
-            !(layer instanceof L.Marker || layer instanceof L.CircleMarker)) {
+            !(layer instanceof L.Marker)) { // Preserve markers while switching
             mapInstance.removeLayer(layer);
         }
     });
@@ -73,7 +93,6 @@ function updateToggleButtons() {
         imgBtn.classList.remove('active-toggle');
         display.textContent = 'Active View: Base Map (Click to set Lat/Lon)';
         
-        // Layer Control
         if (osmLayer) mapInstance.addLayer(osmLayer);
         if (calibrationPoints.mapImage && mapInstance.hasLayer(calibrationPoints.mapImage)) {
             mapInstance.removeLayer(calibrationPoints.mapImage);
@@ -84,7 +103,6 @@ function updateToggleButtons() {
         imgBtn.classList.add('active-toggle');
         display.textContent = 'Active View: Image Map (Click to set Pixel X/Y)';
         
-        // Layer Control
         if (osmLayer && mapInstance.hasLayer(osmLayer)) {
             mapInstance.removeLayer(osmLayer);
         }
@@ -102,9 +120,8 @@ function updateToggleButtons() {
 function toggleToBaseMap() {
     if (currentMapView === 'base') return; 
     
-    // 1. SAVE the Image Map's last view state
-    imageMapViewState.center = mapInstance.getCenter();
-    imageMapViewState.zoom = mapInstance.getZoom();
+    // 1. SAVE the view state of the map we are LEAVING
+    saveCurrentViewState();
 
     // 2. SWITCH CRS and Layers
     mapInstance.options.crs = L.CRS.EPSG3857;
@@ -118,9 +135,8 @@ function toggleToBaseMap() {
 function toggleToImageMap() {
     if (currentMapView === 'image') return;
     
-    // 1. SAVE the Base Map's last view state
-    baseMapViewState.center = mapInstance.getCenter();
-    baseMapViewState.zoom = mapInstance.getZoom();
+    // 1. SAVE the view state of the map we are LEAVING
+    saveCurrentViewState();
     
     // 2. SWITCH CRS and Layers
     mapInstance.options.crs = L.CRS.Simple;
@@ -130,14 +146,12 @@ function toggleToImageMap() {
         const {width, height} = calibrationPoints.imageDimensions;
         const bounds = [[0, 0], [height, width]];
         
-        // SetBounds needs to be called to anchor the image correctly in the new CRS
         calibrationPoints.mapImage.setBounds(bounds);
         
-        // Use fitBounds on initial switch to ensure the entire image is seen
+        // Restore the Image Map's last view state
         if (imageMapViewState.zoom === 0) {
-             mapInstance.fitBounds(bounds); 
+             mapInstance.fitBounds(bounds); // Fit bounds only on initial load
         } else {
-             // Restore the Image Map's last view state for independent movement
              mapInstance.setView(imageMapViewState.center, imageMapViewState.zoom);
         }
     }
@@ -146,7 +160,7 @@ function toggleToImageMap() {
     updateToggleButtons();
 }
 
-// --- GPS TRACKING AND OPERATION PHASE (Unchanged) ---
+// --- GPS TRACKING AND OPERATION PHASE (Unchanged for this fix) ---
 
 function startGpsTracking(H_inv, mapUrl, meterToPixelScale) {
     if (!navigator.geolocation) {
@@ -161,4 +175,131 @@ function startGpsTracking(H_inv, mapUrl, meterToPixelScale) {
     document.getElementById('activeMapDisplay').style.display = 'none';
 
     // 1. REVERT to L.CRS.Simple for the final Image-Centric Display
-    mapInstance.options.crs = L.
+    mapInstance.options.crs = L.CRS.Simple;
+    
+    // Clear ALL layers
+    mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
+    
+    // 2. Display the Final Unwarped Image using PIXEL BOUNDS
+    const {width, height} = calibrationPoints.imageDimensions;
+    const bounds = [[0, 0], [height, width]]; // [Y, X] order
+    L.imageOverlay(mapUrl, bounds, { attribution: 'Custom Image Overlay' }).addTo(mapInstance);
+    mapInstance.fitBounds(bounds); 
+    
+    // 3. Start GPS watch
+    const watchOptions = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
+
+    navigator.geolocation.watchPosition(
+        (position) => {
+            const currentLat = position.coords.latitude;
+            const currentLon = position.coords.longitude;
+            const accuracy = position.coords.accuracy;
+            
+            const [X_px, Y_px] = projectPoint(H_inv, currentLon, currentLat); 
+            const newPixelPoint = [Y_px, X_px]; 
+            const pixelRadius = accuracy * meterToPixelScale; 
+            
+            // Update Marker and Circle logic (omitted for brevity)
+        },
+        (error) => { console.error("Geolocation Error:", error); },
+        watchOptions
+    );
+}
+
+
+// --- CALIBRATION PHASE FUNCTIONS (Minor change to restore view on confirmation) ---
+
+function handleMapClick(e) {
+    const step = calibrationPoints.currentStep;
+    
+    if (calibrationPoints.activeMarker) return;
+    mapInstance.off('click', handleMapClick); 
+
+    // Create the draggable marker 
+    const iconHtml = `<div class="pinpoint-marker"><label>P${step}</label></div>`;
+    const newMarker = L.marker(e.latlng, {
+        draggable: true,
+        title: `P${step}`,
+        icon: L.divIcon({className: 'pinpoint-marker', html: iconHtml})
+    }).addTo(mapInstance);
+
+    calibrationPoints.activeMarker = newMarker;
+
+    newMarker.on('dragend', function() {
+        document.getElementById('status-message').innerHTML = `P${step} position updated. Click **Confirm Point** to finalize.`;
+    });
+    
+    document.getElementById('status-message').innerHTML = `P${step} set on the **${currentMapView === 'base' ? 'Base Map' : 'Image Map'}**. Drag the marker to adjust, then click **Confirm Point**.`;
+    document.getElementById('confirmPointButton').style.display = 'inline';
+}
+
+function confirmCurrentPoint() {
+    const step = calibrationPoints.currentStep;
+    const marker = calibrationPoints.activeMarker;
+    if (!marker) return;
+
+    if (currentMapView === 'base') {
+        // Store REAL-WORLD (LatLng) coordinate
+        const finalLatLng = marker.getLatLng();
+        calibrationPoints.P_real.push(finalLatLng);
+        
+        mapInstance.removeLayer(marker); 
+        calibrationPoints.activeMarker = null;
+        
+        // Save Base Map state right before switching
+        saveCurrentViewState();
+
+        toggleToImageMap(); // Switch to the Image Map view
+        document.getElementById('status-message').innerHTML = `**P${step} Real-World** confirmed. Click on the **Image Map** to set the corresponding pixel point.`;
+        mapInstance.on('click', handleMapClick); 
+        
+    } else { // currentMapView === 'image'
+        // Calculate and store the PIXEL coordinate
+        const finalLatLng = marker.getLatLng(); 
+        
+        const mapBounds = calibrationPoints.mapImage.getBounds();
+        const pixelPoint = mapInstance.latLngToContainerPoint(finalLatLng);
+        
+        const imageTopLeftPixel = mapInstance.latLngToContainerPoint(mapBounds.getNorthWest());
+        
+        const x_px = pixelPoint.x - imageTopLeftPixel.x;
+        const y_px = pixelPoint.y - imageTopLeftPixel.y;
+        
+        calibrationPoints.P_pixel.push({x: x_px, y: y_px});
+        
+        // Cleanup marker and advance
+        mapInstance.removeLayer(marker); 
+        calibrationPoints.activeMarker = null;
+        document.getElementById('confirmPointButton').style.display = 'none';
+
+        // Save Image Map state right before switching
+        saveCurrentViewState();
+
+        calibrationPoints.currentStep++;
+        
+        if (calibrationPoints.currentStep <= 4) {
+            // Continue to the next point, starting back on the Base Map
+            toggleToBaseMap(); 
+            document.getElementById('status-message').innerHTML = `**P${step} Pixel** confirmed. Click on the **Base Map** to set **P${calibrationPoints.currentStep} Real-World** point.`;
+            mapInstance.on('click', handleMapClick); 
+        } else {
+            // All 4 points collected! Final step.
+            document.getElementById('status-message').innerHTML = 'Calibration complete! Calculating projection...';
+            runFinalProjection(); 
+        }
+    }
+}
+
+function runFinalProjection() {
+    // Logic for calculating H, H_inv, and meterToPixelScale (omitted for brevity)
+    // ...
+    // startGpsTracking(H_inv, document.getElementById('mapUrl').value, meterToPixelScale);
+}
+
+// --- MAIN EXECUTION AND SETUP PHASE ---
+
+document.getElementById('startCalibrationButton').addEventListener('click', function() {
+    const mapUrl = document.getElementById('mapUrl').value.trim();
+
+    if (!mapUrl) {
+        alert
