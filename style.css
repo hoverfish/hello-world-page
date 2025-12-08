@@ -45,17 +45,52 @@ button:hover {
     background-color: #0056b3;
 }
 
-/* Custom style for the draggable control point markers */
-.calibration-marker {
-    background-color: white;
-    border: 2px solid #FF0000;
-    border-radius: 5px;
-    padding: 5px;
-    text-align: center;
-    color: #FF0000;
-    font-size: 14px;
-    width: auto !important;
-    height: auto !important;
-    min-width: 30px;
-    line-height: 14px;
+/* Style for the active/inactive toggle buttons */
+.map-controls button {
+    background-color: #f0f0f0;
+    color: #333;
+    border: 1px solid #ccc;
+    margin-top: 0;
+}
+.map-controls button.active-toggle {
+    background-color: #28a745;
+    color: white;
+    border-color: #28a745;
+}
+
+
+/* ----------------------------------------------------- */
+/* CUSTOM PINPOINT MARKER STYLES */
+/* ----------------------------------------------------- */
+.pinpoint-marker {
+    background: transparent;
+    border: none;
+    width: 20px !important;
+    height: 20px !important;
+    margin-left: -10px !important; /* Center the icon horizontally */
+    margin-top: -10px !important;  /* Center the icon vertically */
+}
+.pinpoint-marker::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid red;
+    background: rgba(255, 0, 0, 0.4);
+    transform: translate(-50%, -50%);
+}
+.pinpoint-marker label {
+    position: absolute;
+    top: 25px; /* Position label below the icon */
+    left: 50%;
+    transform: translateX(-50%);
+    font-weight: bold;
+    color: #000;
+    background-color: rgba(255, 255, 255, 0.8);
+    padding: 2px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
 }
