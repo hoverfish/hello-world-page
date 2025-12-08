@@ -2,7 +2,11 @@
 let mapInstance = null;
 let userMarker = null; 
 let accuracyCircle = null; 
-let osmLayer = null; // Store the OSM layer reference here
+let osmLayer = null; 
+
+// New Globals to store independent view states
+let baseMapViewState = { center: [40.7, -74.0], zoom: 13 }; // Default geographic
+let imageMapViewState = { center: [0, 0], zoom: 0 };       // Default pixel center
 
 // Global state variables for Calibration
 let currentMapView = 'base'; // 'base' or 'image'
@@ -49,22 +53,22 @@ function projectPoint(H, x, y) {
     return [x_prime, y_prime];
 }
 
-// --- MAP VIEW TOGGLING LOGIC (The Core Fix A, B, C) ---
+// --- MAP VIEW TOGGLING LOGIC (The Decoupling Fix) ---
 
 function updateToggleButtons() {
     const baseBtn = document.getElementById('toggleBaseMap');
     const imgBtn = document.getElementById('toggleImageMap');
     const display = document.getElementById('activeMapDisplay');
     
-    // Ensure all layers and markers are removed before adding the correct ones
+    // Clear the map of layers for strict control
     mapInstance.eachLayer(layer => {
-        if (layer !== osmLayer && layer !== calibrationPoints.mapImage) {
+        if (layer !== osmLayer && layer !== calibrationPoints.mapImage && 
+            !(layer instanceof L.Marker || layer instanceof L.CircleMarker)) {
             mapInstance.removeLayer(layer);
         }
     });
 
     if (currentMapView === 'base') {
-        // --- BASE MAP VIEW ---
         baseBtn.classList.add('active-toggle');
         imgBtn.classList.remove('active-toggle');
         display.textContent = 'Active View: Base Map (Click to set Lat/Lon)';
@@ -76,7 +80,6 @@ function updateToggleButtons() {
         }
 
     } else { // 'image' view
-        // --- IMAGE MAP VIEW ---
         baseBtn.classList.remove('active-toggle');
         imgBtn.classList.add('active-toggle');
         display.textContent = 'Active View: Image Map (Click to set Pixel X/Y)';
@@ -93,43 +96,57 @@ function updateToggleButtons() {
         calibrationPoints.activeMarker.addTo(mapInstance).bringToFront();
     }
     
-    // Force map size update to avoid display glitches
     mapInstance.invalidateSize(); 
 }
 
 function toggleToBaseMap() {
     if (currentMapView === 'base') return; 
     
-    // FIX A: Switch Map CRS to Geographic (EPSG3857)
-    mapInstance.options.crs = L.CRS.EPSG3857;
-    mapInstance.setView([40.7, -74.0], 13); // Reset view to a default geographic spot
+    // 1. SAVE the Image Map's last view state
+    imageMapViewState.center = mapInstance.getCenter();
+    imageMapViewState.zoom = mapInstance.getZoom();
 
+    // 2. SWITCH CRS and Layers
+    mapInstance.options.crs = L.CRS.EPSG3857;
     currentMapView = 'base';
     updateToggleButtons();
+
+    // 3. RESTORE the Base Map's last view state
+    mapInstance.setView(baseMapViewState.center, baseMapViewState.zoom);
 }
 
 function toggleToImageMap() {
     if (currentMapView === 'image') return;
     
-    // FIX A: Switch Map CRS to Simple (Pixel Space)
+    // 1. SAVE the Base Map's last view state
+    baseMapViewState.center = mapInstance.getCenter();
+    baseMapViewState.zoom = mapInstance.getZoom();
+    
+    // 2. SWITCH CRS and Layers
     mapInstance.options.crs = L.CRS.Simple;
     
-    // Update mapImage bounds and layer
+    // Must redefine bounds and set view for L.CRS.Simple (fixes distortion)
     if (calibrationPoints.mapImage) {
-        // Redefine bounds using PIXELS here for L.CRS.Simple (fixes stretching)
         const {width, height} = calibrationPoints.imageDimensions;
-        const bounds = [[0, 0], [height, width]]; // [Y, X] order
+        const bounds = [[0, 0], [height, width]];
+        
+        // SetBounds needs to be called to anchor the image correctly in the new CRS
         calibrationPoints.mapImage.setBounds(bounds);
         
-        // Force view to fit the new, unstretched image
-        mapInstance.fitBounds(bounds);
+        // Use fitBounds on initial switch to ensure the entire image is seen
+        if (imageMapViewState.zoom === 0) {
+             mapInstance.fitBounds(bounds); 
+        } else {
+             // Restore the Image Map's last view state for independent movement
+             mapInstance.setView(imageMapViewState.center, imageMapViewState.zoom);
+        }
     }
 
     currentMapView = 'image';
     updateToggleButtons();
 }
 
-// --- GPS TRACKING AND OPERATION PHASE (Minor changes) ---
+// --- GPS TRACKING AND OPERATION PHASE (Unchanged) ---
 
 function startGpsTracking(H_inv, mapUrl, meterToPixelScale) {
     if (!navigator.geolocation) {
@@ -144,196 +161,4 @@ function startGpsTracking(H_inv, mapUrl, meterToPixelScale) {
     document.getElementById('activeMapDisplay').style.display = 'none';
 
     // 1. REVERT to L.CRS.Simple for the final Image-Centric Display
-    mapInstance.options.crs = L.CRS.Simple;
-    
-    // Clear ALL layers
-    mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
-    
-    // 2. Display the Final Unwarped Image using PIXEL BOUNDS
-    const {width, height} = calibrationPoints.imageDimensions;
-    const bounds = [[0, 0], [height, width]]; // [Y, X] order
-    L.imageOverlay(mapUrl, bounds, { attribution: 'Custom Image Overlay' }).addTo(mapInstance);
-    mapInstance.fitBounds(bounds); 
-    
-    // 3. Start GPS watch
-    const watchOptions = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
-
-    navigator.geolocation.watchPosition(
-        (position) => {
-            const currentLat = position.coords.latitude;
-            const currentLon = position.coords.longitude;
-            const accuracy = position.coords.accuracy;
-            
-            const [X_px, Y_px] = projectPoint(H_inv, currentLon, currentLat); 
-            const newPixelPoint = [Y_px, X_px]; 
-            const pixelRadius = accuracy * meterToPixelScale; 
-            
-            // Marker and Circle update logic (unchanged)
-            // ... (omitted for brevity)
-        },
-        (error) => { console.error("Geolocation Error:", error); },
-        watchOptions
-    );
-}
-
-// --- CALIBRATION PHASE FUNCTIONS (Minor changes) ---
-
-function handleMapClick(e) {
-    const step = calibrationPoints.currentStep;
-    
-    if (calibrationPoints.activeMarker) return;
-    mapInstance.off('click', handleMapClick); 
-
-    // Create the draggable marker (unchanged)
-    const iconHtml = `<div class="pinpoint-marker"><label>P${step}</label></div>`;
-    const newMarker = L.marker(e.latlng, {
-        draggable: true,
-        title: `P${step}`,
-        icon: L.divIcon({className: 'pinpoint-marker', html: iconHtml})
-    }).addTo(mapInstance);
-
-    calibrationPoints.activeMarker = newMarker;
-
-    newMarker.on('dragend', function() {
-        document.getElementById('status-message').innerHTML = `P${step} position updated. Click **Confirm Point** to finalize.`;
-    });
-    
-    document.getElementById('status-message').innerHTML = `P${step} set on the **${currentMapView === 'base' ? 'Base Map' : 'Image Map'}**. Drag the marker to adjust, then click **Confirm Point**.`;
-    document.getElementById('confirmPointButton').style.display = 'inline';
-}
-
-function confirmCurrentPoint() {
-    const step = calibrationPoints.currentStep;
-    const marker = calibrationPoints.activeMarker;
-    if (!marker) return;
-
-    if (currentMapView === 'base') {
-        // Store REAL-WORLD (LatLng) coordinate
-        const finalLatLng = marker.getLatLng();
-        calibrationPoints.P_real.push(finalLatLng);
-        
-        mapInstance.removeLayer(marker); 
-        calibrationPoints.activeMarker = null;
-        
-        toggleToImageMap(); // Switch to the Image Map view
-        document.getElementById('status-message').innerHTML = `**P${step} Real-World** confirmed. Switch to **Image Map** and click to set the corresponding pixel point.`;
-        mapInstance.on('click', handleMapClick); 
-        
-    } else { // currentMapView === 'image'
-        // Calculate and store the PIXEL coordinate
-        const finalLatLng = marker.getLatLng(); 
-        
-        const mapBounds = calibrationPoints.mapImage.getBounds();
-        const pixelPoint = mapInstance.latLngToContainerPoint(finalLatLng);
-        
-        // Normalize the pixel coordinate relative to the top-left of the image overlay
-        const imageTopLeftPixel = mapInstance.latLngToContainerPoint(mapBounds.getNorthWest());
-        
-        const x_px = pixelPoint.x - imageTopLeftPixel.x;
-        const y_px = pixelPoint.y - imageTopLeftPixel.y;
-        
-        calibrationPoints.P_pixel.push({x: x_px, y: y_px});
-        
-        // Cleanup marker and advance to the next point
-        mapInstance.removeLayer(marker); 
-        calibrationPoints.activeMarker = null;
-        document.getElementById('confirmPointButton').style.display = 'none';
-
-        calibrationPoints.currentStep++;
-        
-        if (calibrationPoints.currentStep <= 4) {
-            // Continue to the next point, starting back on the Base Map
-            toggleToBaseMap(); 
-            document.getElementById('status-message').innerHTML = `**P${step} Pixel** confirmed. Click on the map to set **P${calibrationPoints.currentStep} Real-World** point.`;
-            mapInstance.on('click', handleMapClick); 
-        } else {
-            // All 4 points collected! Final step.
-            document.getElementById('status-message').innerHTML = 'Calibration complete! Calculating projection...';
-            runFinalProjection(); 
-        }
-    }
-}
-
-function runFinalProjection() {
-    const { P_pixel, P_real, imageDimensions } = calibrationPoints;
-    
-    // 1. Calculate Matrices (unchanged)
-    // ...
-    
-    // 3. Start the final tracking phase
-    startGpsTracking(H_inv, document.getElementById('mapUrl').value, meterToPixelScale);
-}
-
-// --- MAIN EXECUTION AND SETUP PHASE ---
-
-document.getElementById('startCalibrationButton').addEventListener('click', function() {
-    const mapUrl = document.getElementById('mapUrl').value.trim();
-
-    // CHECK 1: MISSING URL
-    if (!mapUrl) {
-        alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
-        return; 
-    }
-
-    // Initialize Map and OSM Layer
-    if (!mapInstance) {
-        mapInstance = L.map('map').setView([40.7, -74.0], 13);
-        osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
-        mapInstance.addLayer(osmLayer);
-    } else {
-        // Clean up and ensure we are starting on the geographic CRS
-        mapInstance.options.crs = L.CRS.EPSG3857; 
-        mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
-        if (osmLayer) mapInstance.addLayer(osmLayer);
-    }
-    
-    // Reset calibration state
-    calibrationPoints = { 
-        currentStep: 1, P_pixel: [], P_real: [], activeMarker: null, mapImage: null, imageDimensions: {}
-    };
-    document.getElementById('status-message').innerHTML = 'Loading image...';
-    
-    // 1. Load Image (to get dimensions)
-    const image = new Image();
-    
-    // CHECK 2: INVALID URL / LOADING FAILURE
-    image.onerror = function() {
-        document.getElementById('status-message').innerHTML = 'Image loading failed.';
-        alert("❌ Error: Could not load the image from the provided URL. Please check the link and ensure the image is publicly accessible (JPG/PNG).");
-        if (mapInstance) mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
-    };
-    
-    image.onload = function() {
-        const width = this.width;
-        const height = this.height;
-
-        calibrationPoints.imageDimensions = {width, height};
-
-        // 2. Create the TEMPORARY image overlay 
-        // We use wide geographic bounds for setup, which will be ignored once CRS is switched.
-        const tempBounds = L.latLngBounds([10, -180], [80, 180]); 
-        
-        calibrationPoints.mapImage = L.imageOverlay(mapUrl, tempBounds, {
-            opacity: 1.0, 
-            attribution: 'Calibration Image Overlay',
-            interactive: false
-        }); // Do NOT add to map yet, it will be added by the toggle function
-        
-        document.getElementById('status-message').innerHTML = `Image loaded (${width}x${height}). Click on the map to set **P1 (Real-World)** point.`;
-        
-        // 3. Start listening for clicks and ENABLE buttons (Fix B)
-        currentMapView = 'base'; // Ensure we start on the base map
-        updateToggleButtons(); // This enables the buttons and sets initial view
-        mapInstance.on('click', handleMapClick);
-        document.getElementById('confirmPointButton').style.display = 'none';
-    };
-    
-    image.src = mapUrl;
-});
-
-// Attach the confirm button handler
-document.getElementById('confirmPointButton').addEventListener('click', confirmCurrentPoint);
-
-// Attach the toggle button handlers (Fix B)
-document.getElementById('toggleBaseMap').addEventListener('click', toggleToBaseMap);
-document.getElementById('toggleImageMap').addEventListener('click', toggleToImageMap);
+    mapInstance.options.crs = L.
