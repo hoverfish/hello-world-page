@@ -12,7 +12,7 @@
 <body>
 
     <div class="container">
-        <h1>Maprika-Style GPS Overlay (V2.6)</h1>
+        <h1>Maprika-Style GPS Overlay (V2.61)</h1>
         <p>Use the Interactive Calibration to visually match the map corners.</p>
 
         <label for="mapUrl">Map Image URL (JPG/PNG):</label>
@@ -50,17 +50,5 @@
     
     <script src="app.js"></script> 
     
-    <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        
-        // --- START BUTTON ATTACHMENT ---
-        document.getElementById('startCalibrationButton').addEventListener('click', function() {
-            const mapUrl = document.getElementById('mapUrl').value.trim();
-
-            if (!mapUrl) {
-                alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
-                return; 
-            }
-            
-            // Calls the centralized setup function defined in app.js
-            initialize
+</body>
+</html>
