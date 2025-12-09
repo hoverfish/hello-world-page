@@ -1,4 +1,4 @@
-// Maprika Clone Application - V2.16 (Start Button Click Fix and Flow Refinement)
+// Maprika Clone Application - V2.17 (Simplified Loading Flow)
 
 // Global variables to hold the map instance and tracking markers
 let mapInstance = null;
@@ -43,7 +43,6 @@ function saveCalibrationSettings() {
         };
         localStorage.setItem('maprikaCalibrationSettings', JSON.stringify(settings));
         
-        // Ensure the button is visible after saving
         document.getElementById('clearSettingsButton').style.display = 'inline';
 
     } catch (e) {
@@ -58,8 +57,6 @@ function loadCalibrationSettings() {
             const settings = JSON.parse(settingsString);
             if (settings.P_real && settings.P_real.length === 4 && settings.P_pixel && settings.P_pixel.length === 4) {
                 
-                // Convert plain objects back to L.LatLng objects
-                // Note: L.latLng expects (lat, lng). P_pixel is stored as {x: Lng, y: Lat}
                 calibrationPoints.P_real = settings.P_real.map(p => L.latLng(p.lat, p.lng));
                 calibrationPoints.P_pixel = settings.P_pixel.map(p => ({x: p.lng, y: p.lat}));
                 
@@ -81,14 +78,12 @@ function loadCalibrationSettings() {
 
 function clearCalibrationSettings() {
     localStorage.removeItem('maprikaCalibrationSettings');
-    
-    // Use location.reload() for a clean reset
     location.reload(); 
 }
 
 
 // --- GEOMETRY UTILITY FUNCTIONS ---
-// (Unchanged from V2.15)
+// (Unchanged)
 function calculateHomographyMatrix(P_pixel, P_real) {
     const A = [];
     const B = [];
@@ -155,7 +150,7 @@ function projectGpsToPixel(H_inv, lon, lat) {
 
 
 // --- LIVE DISPLAY & GPS FUNCTIONS ---
-// (Unchanged from V2.15)
+// (Unchanged)
 function updateLiveDisplay() {
     if (!mapInstance) return; 
 
@@ -241,7 +236,7 @@ function saveCurrentViewState() {
 
 
 // --- MAP VIEW TOGGLING LOGIC ---
-// (Unchanged from V2.15)
+// (Unchanged)
 function updateToggleButtons() {
     const baseBtn = document.getElementById('toggleBaseMap');
     const imgBtn = document.getElementById('toggleImageMap');
@@ -343,7 +338,7 @@ function toggleToImageMap() {
 
 
 // --- CALIBRATION PHASE FUNCTIONS ---
-// (Unchanged from V2.15)
+// (Unchanged)
 function handleMapClick(e) {
     const step = calibrationPoints.currentStep;
     
@@ -453,7 +448,6 @@ function runFinalProjection() {
     
     document.getElementById('confirmPointButton').style.display = 'none';
     
-    // Remove the temporary map click listener used for calibration
     mapInstance.off('click', handleMapClick); 
     
     if (currentMapView === 'image' && calibrationPoints.mapImage) {
@@ -480,10 +474,6 @@ function runLoadedProjection() {
         calibrationPoints.P_real
     );
 
-    // FIX: Re-enable buttons which might have been disabled
-    document.getElementById('startCalibrationButton').disabled = false; 
-
-    // Enable toggle buttons immediately
     document.getElementById('toggleBaseMap').disabled = false;
     document.getElementById('toggleImageMap').disabled = false;
     document.getElementById('centerGpsButton').disabled = false; 
@@ -495,7 +485,7 @@ function runLoadedProjection() {
 
 
 // --- CONTINUOUS GPS TRACKING (Unified BaseMap & ImageMap) ---
-// (Unchanged from V2.15)
+// (Unchanged)
 function startGpsTracking() {
     if (!navigator.geolocation) {
         console.error("Geolocation is not supported by your browser.");
@@ -562,7 +552,8 @@ function startGpsTracking() {
 
 // --- MAIN EXECUTION AND SETUP PHASE ---
 
-function initializeMapAndListeners(mapUrl, isFreshStart = false) { // Added isFreshStart flag
+function initializeMapAndListeners(mapUrl) {
+    // 1. Map Initialization (if mapInstance is null)
     if (!mapInstance) {
         mapInstance = L.map('map', {
             minZoom: -4, 
@@ -580,19 +571,24 @@ function initializeMapAndListeners(mapUrl, isFreshStart = false) { // Added isFr
         mapInstance.on('moveend', updateLiveDisplay);
         mapInstance.on('zoomend', updateLiveDisplay);
 
-        // Initial setup for buttons (only needs to happen once)
+        // Attach event listeners to buttons (only once)
         document.getElementById('centerGpsButton').addEventListener('click', centerMapOnGps);
         document.getElementById('confirmPointButton').addEventListener('click', confirmCurrentPoint);
         document.getElementById('toggleBaseMap').addEventListener('click', toggleToBaseMap);
         document.getElementById('toggleImageMap').addEventListener('click', toggleToImageMap);
+
     } else {
+        // 2. Map Reset (if mapInstance exists, clear image/calibration state)
         mapInstance.options.crs = L.CRS.EPSG3857; 
-        mapInstance.options.maxZoom = 20; 
-        mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
-        if (osmLayer) mapInstance.addLayer(osmLayer);
+        mapInstance.eachLayer(layer => {
+            if (layer !== osmLayer && layer !== userMarker && layer !== accuracyCircle) {
+                 mapInstance.removeLayer(layer);
+            }
+        });
+        if (!mapInstance.hasLayer(osmLayer)) mapInstance.addLayer(osmLayer);
     }
     
-    // Clear all calibration state EXCEPT GPS markers, which are continuously tracked
+    // 3. Reset Calibration State
     calibrationPoints = { 
         currentStep: 1, P_pixel: [], P_real: [], activeMarker: null, mapImage: null, imageDimensions: {},
         H_matrix: null, H_inv: null, 
@@ -600,14 +596,14 @@ function initializeMapAndListeners(mapUrl, isFreshStart = false) { // Added isFr
         accuracyPixelCircle: calibrationPoints.accuracyPixelCircle, 
         avgScaleFactor: 0 
     };
-
+    
     document.getElementById('confirmPointButton').style.display = 'none';
 
-    // Start continuous GPS tracking (Ensures markers are initialized and updating)
+    // 4. Start/Restart continuous GPS tracking 
     startGpsTracking(); 
     
-    // Load settings only if it's not a fresh start click
-    const hasLoadedSettings = !isFreshStart && loadCalibrationSettings();
+    // 5. Load Settings Check
+    const hasLoadedSettings = loadCalibrationSettings();
 
     document.getElementById('status-message').innerHTML = 'Loading image...';
     
@@ -655,21 +651,16 @@ function initializeMapAndListeners(mapUrl, isFreshStart = false) { // Added isFr
 }
 
 // -----------------------------------------------------------------
-// --- FINAL EVENT ATTACHMENTS (DOM Ready Fix) ---
+// --- FINAL EVENT ATTACHMENTS (DOM Ready Fix applied here) ---
 // -----------------------------------------------------------------
 
 document.addEventListener('DOMContentLoaded', (event) => {
     const startBtn = document.getElementById('startCalibrationButton');
     const mapUrlField = document.getElementById('mapUrl');
     
-    if (mapUrlField.value.trim()) {
-        // Initial automatic load if a URL is already in the field (e.g., from index.html default)
-        initializeMapAndListeners(mapUrlField.value.trim(), false);
-    } else {
-         // Load saved settings display even if map isn't initialized yet
-         loadCalibrationSettings();
-    }
-    
+    // Initial status check before the map is even initialized
+    loadCalibrationSettings();
+
     if (startBtn) {
         startBtn.addEventListener('click', function() {
             const currentMapUrl = mapUrlField.value.trim();
@@ -677,8 +668,8 @@ document.addEventListener('DOMContentLoaded', (event) => {
                 alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
                 return; 
             }
-            // Force a fresh start, ignoring any saved settings in this session
-            initializeMapAndListeners(currentMapUrl, true);
+            // Start the initialization process, which handles saved settings internally
+            initializeMapAndListeners(currentMapUrl);
         });
     }
 });
