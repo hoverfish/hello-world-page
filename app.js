@@ -1,4 +1,4 @@
-// Maprika Clone Application - V2.17 (Simplified Loading Flow)
+// Maprika Clone Application - V2.18 (Added Robust Error Logging)
 
 // Global variables to hold the map instance and tracking markers
 let mapInstance = null;
@@ -34,7 +34,7 @@ let gpsWatchId = null;
 
 
 // --- PERSISTENCE FUNCTIONS ---
-
+// (Unchanged)
 function saveCalibrationSettings() {
     try {
         const settings = {
@@ -46,7 +46,7 @@ function saveCalibrationSettings() {
         document.getElementById('clearSettingsButton').style.display = 'inline';
 
     } catch (e) {
-        console.error("Could not save settings to localStorage:", e);
+        console.error("ERROR (Persistence): Could not save settings to localStorage:", e);
     }
 }
 
@@ -71,7 +71,7 @@ function loadCalibrationSettings() {
         document.getElementById('status-message').innerHTML = 'Click \'**Start Calibration**\' to begin.';
         return false;
     } catch (e) {
-        console.error("Could not load settings from localStorage:", e);
+        console.error("ERROR (Persistence): Could not load settings from localStorage:", e);
         return false;
     }
 }
@@ -212,7 +212,7 @@ function centerMapOnGps() {
             mapInstance.setView(currentLatLng, mapInstance.getZoom());
         },
         (error) => {
-            console.error("Geolocation Error:", error);
+            console.error("ERROR (GPS): Could not retrieve current GPS location for centering.", error);
             alert("Could not retrieve current GPS location.");
         },
         { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
@@ -378,81 +378,91 @@ function handleMapClick(e) {
 }
 
 function confirmCurrentPoint() {
-    const step = calibrationPoints.currentStep;
-    const marker = calibrationPoints.activeMarker;
-    if (!marker) return;
+    try {
+        const step = calibrationPoints.currentStep;
+        const marker = calibrationPoints.activeMarker;
+        if (!marker) return;
 
-    if (currentMapView === 'base') {
-        const finalLatLng = marker.getLatLng();
-        calibrationPoints.P_real.push(finalLatLng);
-        
-        mapInstance.removeLayer(marker); 
-        calibrationPoints.activeMarker = null;
-        
-        saveCurrentViewState();
+        if (currentMapView === 'base') {
+            const finalLatLng = marker.getLatLng();
+            calibrationPoints.P_real.push(finalLatLng);
+            
+            mapInstance.removeLayer(marker); 
+            calibrationPoints.activeMarker = null;
+            
+            saveCurrentViewState();
 
-        toggleToImageMap(); 
-        document.getElementById('status-message').innerHTML = `**P${step} Real-World** confirmed. Click on the **Image Map** to set the corresponding pixel point.`;
-        
-        mapInstance.on('click', handleMapClick); 
-        
-    } else { // currentMapView === 'image'
-        const finalLatLng = marker.getLatLng(); 
-        
-        const x_px = finalLatLng.lng;
-        const y_px = finalLatLng.lat;
-        
-        calibrationPoints.P_pixel.push({x: x_px, y: y_px});
-        
-        mapInstance.removeLayer(marker); 
-        calibrationPoints.activeMarker = null;
-        document.getElementById('confirmPointButton').style.display = 'none';
-
-        saveCurrentViewState();
-
-        calibrationPoints.currentStep++;
-        
-        if (calibrationPoints.currentStep <= 4) {
-            toggleToBaseMap(); 
-            document.getElementById('status-message').innerHTML = `**P${step} Pixel** confirmed. Click on the **Base Map** to set **P${calibrationPoints.currentStep} Real-World** point.`;
+            toggleToImageMap(); 
+            document.getElementById('status-message').innerHTML = `**P${step} Real-World** confirmed. Click on the **Image Map** to set the corresponding pixel point.`;
+            
             mapInstance.on('click', handleMapClick); 
-        } else {
-            document.getElementById('status-message').innerHTML = 'Calibration complete! Calculating projection...';
-            runFinalProjection(); 
+            
+        } else { // currentMapView === 'image'
+            const finalLatLng = marker.getLatLng(); 
+            
+            const x_px = finalLatLng.lng;
+            const y_px = finalLatLng.lat;
+            
+            calibrationPoints.P_pixel.push({x: x_px, y: y_px});
+            
+            mapInstance.removeLayer(marker); 
+            calibrationPoints.activeMarker = null;
+            document.getElementById('confirmPointButton').style.display = 'none';
+
+            saveCurrentViewState();
+
+            calibrationPoints.currentStep++;
+            
+            if (calibrationPoints.currentStep <= 4) {
+                toggleToBaseMap(); 
+                document.getElementById('status-message').innerHTML = `**P${step} Pixel** confirmed. Click on the **Base Map** to set **P${calibrationPoints.currentStep} Real-World** point.`;
+                mapInstance.on('click', handleMapClick); 
+            } else {
+                document.getElementById('status-message').innerHTML = 'Calibration complete! Calculating projection...';
+                runFinalProjection(); 
+            }
         }
+        
+        updateControlPointInfo(); 
+    } catch (e) {
+        console.error("ERROR (Calibration): Failed during point confirmation.", e);
+        document.getElementById('status-message').innerHTML = "🚨 **ERROR during calibration.** Check console.";
     }
-    
-    updateControlPointInfo(); 
 }
 
 function runFinalProjection() {
-    // 1. Calculate the Homography Matrix (Pixel -> Real)
-    const H = calculateHomographyMatrix(calibrationPoints.P_pixel, calibrationPoints.P_real);
-    calibrationPoints.H_matrix = H;
+    try {
+        // 1. Calculate the Homography Matrix (Pixel -> Real)
+        const H = calculateHomographyMatrix(calibrationPoints.P_pixel, calibrationPoints.P_real);
+        calibrationPoints.H_matrix = H;
 
-    // 2. Calculate the Inverse Homography Matrix (Real -> Pixel)
-    const H_inv = numeric.inv(H); 
-    calibrationPoints.H_inv = H_inv;
-    
-    // 3. Calculate Average Scale Factor (Meters/Pixel)
-    calibrationPoints.avgScaleFactor = calculateAverageScaleFactor(
-        calibrationPoints.P_pixel, 
-        calibrationPoints.P_real
-    );
-    
-    // 4. Save settings for next session
-    saveCalibrationSettings();
-    
-    document.getElementById('status-message').innerHTML = `✅ **Calibration Complete!** Scale: ${calibrationPoints.avgScaleFactor.toFixed(3)} M/px. <span id="clearSettingsContainer"><button id="clearSettingsButton" class="small-button">Clear Settings</button></span>`;
-    document.getElementById('clearSettingsButton').addEventListener('click', clearCalibrationSettings);
-    
-    document.getElementById('confirmPointButton').style.display = 'none';
-    
-    mapInstance.off('click', handleMapClick); 
-    
-    if (currentMapView === 'image' && calibrationPoints.mapImage) {
-        const {width, height} = calibrationPoints.imageDimensions;
-        calibrationPoints.mapImage.setBounds([[0, 0], [height, width]]);
+        // 2. Calculate the Inverse Homography Matrix (Real -> Pixel)
+        const H_inv = numeric.inv(H); 
+        calibrationPoints.H_inv = H_inv;
+        
+        // 3. Calculate Average Scale Factor (Meters/Pixel)
+        calibrationPoints.avgScaleFactor = calculateAverageScaleFactor(
+            calibrationPoints.P_pixel, 
+            calibrationPoints.P_real
+        );
+        
+        // 4. Save settings for next session
+        saveCalibrationSettings();
+        
+        document.getElementById('status-message').innerHTML = `✅ **Calibration Complete!** Scale: ${calibrationPoints.avgScaleFactor.toFixed(3)} M/px. <span id="clearSettingsContainer"><button id="clearSettingsButton" class="small-button">Clear Settings</button></span>`;
+        document.getElementById('clearSettingsButton').addEventListener('click', clearCalibrationSettings);
+        
+        document.getElementById('confirmPointButton').style.display = 'none';
+        
+        mapInstance.off('click', handleMapClick); 
+        
+        if (currentMapView === 'image' && calibrationPoints.mapImage) {
+            const {width, height} = calibrationPoints.imageDimensions;
+            calibrationPoints.mapImage.setBounds([[0, 0], [height, width]]);
+        }
+    } catch (e) {
+        console.error("ERROR (Projection): Failed during final projection calculation.", e);
+        document.getElementById('status-message').innerHTML = "🚨 **ERROR during projection calculation.** Check console.";
     }
 }
 
@@ -460,27 +470,32 @@ function runFinalProjection() {
  * Runs the projection using loaded calibration settings, skipping interactive steps.
  */
 function runLoadedProjection() {
-    // 1. Calculate the Homography Matrix (Pixel -> Real)
-    const H = calculateHomographyMatrix(calibrationPoints.P_pixel, calibrationPoints.P_real);
-    calibrationPoints.H_matrix = H;
+    try {
+        // 1. Calculate the Homography Matrix (Pixel -> Real)
+        const H = calculateHomographyMatrix(calibrationPoints.P_pixel, calibrationPoints.P_real);
+        calibrationPoints.H_matrix = H;
 
-    // 2. Calculate the Inverse Homography Matrix (Real -> Pixel)
-    const H_inv = numeric.inv(H); 
-    calibrationPoints.H_inv = H_inv;
-    
-    // 3. Calculate Average Scale Factor (Meters/Pixel)
-    calibrationPoints.avgScaleFactor = calculateAverageScaleFactor(
-        calibrationPoints.P_pixel, 
-        calibrationPoints.P_real
-    );
+        // 2. Calculate the Inverse Homography Matrix (Real -> Pixel)
+        const H_inv = numeric.inv(H); 
+        calibrationPoints.H_inv = H_inv;
+        
+        // 3. Calculate Average Scale Factor (Meters/Pixel)
+        calibrationPoints.avgScaleFactor = calculateAverageScaleFactor(
+            calibrationPoints.P_pixel, 
+            calibrationPoints.P_real
+        );
 
-    document.getElementById('toggleBaseMap').disabled = false;
-    document.getElementById('toggleImageMap').disabled = false;
-    document.getElementById('centerGpsButton').disabled = false; 
+        document.getElementById('toggleBaseMap').disabled = false;
+        document.getElementById('toggleImageMap').disabled = false;
+        document.getElementById('centerGpsButton').disabled = false; 
 
-    // Update status to reflect loaded state
-    document.getElementById('status-message').innerHTML = `✅ **Calibration Loaded!** Scale: ${calibrationPoints.avgScaleFactor.toFixed(3)} M/px. <span id="clearSettingsContainer"><button id="clearSettingsButton" class="small-button">Clear Settings</button></span>`;
-    document.getElementById('clearSettingsButton').addEventListener('click', clearCalibrationSettings);
+        // Update status to reflect loaded state
+        document.getElementById('status-message').innerHTML = `✅ **Calibration Loaded!** Scale: ${calibrationPoints.avgScaleFactor.toFixed(3)} M/px. <span id="clearSettingsContainer"><button id="clearSettingsButton" class="small-button">Clear Settings</button></span>`;
+        document.getElementById('clearSettingsButton').addEventListener('click', clearCalibrationSettings);
+    } catch (e) {
+        console.error("ERROR (Projection): Failed during loaded projection calculation.", e);
+        document.getElementById('status-message').innerHTML = "🚨 **ERROR during loaded projection.** Check console.";
+    }
 }
 
 
@@ -498,6 +513,7 @@ function startGpsTracking() {
     
     gpsWatchId = navigator.geolocation.watchPosition(
         (position) => {
+            // ... (GPS update logic unchanged) ...
             const lon = position.coords.longitude;
             const lat = position.coords.latitude;
             const accuracy_real = position.coords.accuracy; 
@@ -543,7 +559,7 @@ function startGpsTracking() {
             updateToggleButtons(); 
         },
         (error) => {
-            console.error("Geolocation Tracking Error:", error);
+            console.error("ERROR (GPS Tracking): Failed to watch position.", error);
         },
         { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
     );
@@ -553,123 +569,148 @@ function startGpsTracking() {
 // --- MAIN EXECUTION AND SETUP PHASE ---
 
 function initializeMapAndListeners(mapUrl) {
-    // 1. Map Initialization (if mapInstance is null)
-    if (!mapInstance) {
-        mapInstance = L.map('map', {
-            minZoom: -4, 
-            maxZoom: 20, 
-        }).setView(baseMapViewState.center, baseMapViewState.zoom);
-        
-        osmLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012',
-            maxZoom: 20 
-        });
-        mapInstance.addLayer(osmLayer);
-        
-        mapInstance.on('moveend', saveCurrentViewState);
-        mapInstance.on('zoomend', saveCurrentViewState);
-        mapInstance.on('moveend', updateLiveDisplay);
-        mapInstance.on('zoomend', updateLiveDisplay);
+    try {
+        // 1. Map Initialization (if mapInstance is null)
+        if (!mapInstance) {
+            mapInstance = L.map('map', {
+                minZoom: -4, 
+                maxZoom: 20, 
+            }).setView(baseMapViewState.center, baseMapViewState.zoom);
+            
+            osmLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+                attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012',
+                maxZoom: 20 
+            });
+            mapInstance.addLayer(osmLayer);
+            
+            mapInstance.on('moveend', saveCurrentViewState);
+            mapInstance.on('zoomend', saveCurrentViewState);
+            mapInstance.on('moveend', updateLiveDisplay);
+            mapInstance.on('zoomend', updateLiveDisplay);
 
-        // Attach event listeners to buttons (only once)
-        document.getElementById('centerGpsButton').addEventListener('click', centerMapOnGps);
-        document.getElementById('confirmPointButton').addEventListener('click', confirmCurrentPoint);
-        document.getElementById('toggleBaseMap').addEventListener('click', toggleToBaseMap);
-        document.getElementById('toggleImageMap').addEventListener('click', toggleToImageMap);
+            // Attach event listeners to buttons (only once)
+            document.getElementById('centerGpsButton').addEventListener('click', centerMapOnGps);
+            document.getElementById('confirmPointButton').addEventListener('click', confirmCurrentPoint);
+            document.getElementById('toggleBaseMap').addEventListener('click', toggleToBaseMap);
+            document.getElementById('toggleImageMap').addEventListener('click', toggleToImageMap);
 
-    } else {
-        // 2. Map Reset (if mapInstance exists, clear image/calibration state)
-        mapInstance.options.crs = L.CRS.EPSG3857; 
-        mapInstance.eachLayer(layer => {
-            if (layer !== osmLayer && layer !== userMarker && layer !== accuracyCircle) {
-                 mapInstance.removeLayer(layer);
-            }
-        });
-        if (!mapInstance.hasLayer(osmLayer)) mapInstance.addLayer(osmLayer);
-    }
-    
-    // 3. Reset Calibration State
-    calibrationPoints = { 
-        currentStep: 1, P_pixel: [], P_real: [], activeMarker: null, mapImage: null, imageDimensions: {},
-        H_matrix: null, H_inv: null, 
-        gpsPixelMarker: calibrationPoints.gpsPixelMarker, 
-        accuracyPixelCircle: calibrationPoints.accuracyPixelCircle, 
-        avgScaleFactor: 0 
-    };
-    
-    document.getElementById('confirmPointButton').style.display = 'none';
-
-    // 4. Start/Restart continuous GPS tracking 
-    startGpsTracking(); 
-    
-    // 5. Load Settings Check
-    const hasLoadedSettings = loadCalibrationSettings();
-
-    document.getElementById('status-message').innerHTML = 'Loading image...';
-    
-    const image = new Image();
-    
-    image.onerror = function() {
-        document.getElementById('status-message').innerHTML = 'Image loading failed.';
-        alert("❌ Error: Could not load the image from the provided URL. Please check the link and ensure the image is publicly accessible (JPG/PNG).");
-    };
-    
-    image.onload = function() {
-        const width = this.width;
-        const height = this.height;
-
-        calibrationPoints.imageDimensions = {width, height};
-
-        const tempBounds = L.latLngBounds([10, -180], [80, 180]); 
-        
-        calibrationPoints.mapImage = L.imageOverlay(mapUrl, tempBounds, {
-            opacity: 1.0, 
-            attribution: 'Calibration Image Overlay',
-            interactive: false 
-        });
-        
-        currentMapView = 'base'; 
-        
-        // Enable toggle and center buttons
-        document.getElementById('toggleBaseMap').disabled = false;
-        document.getElementById('toggleImageMap').disabled = false;
-        document.getElementById('centerGpsButton').disabled = false; 
-
-        if (hasLoadedSettings) {
-             runLoadedProjection();
         } else {
-             // START INTERACTIVE CALIBRATION FLOW
-             document.getElementById('status-message').innerHTML = `Image loaded (${width}x${height}). Click on the map to set **P1 (Real-World)** point.`;
-             mapInstance.on('click', handleMapClick); 
+            // 2. Map Reset (if mapInstance exists, clear image/calibration state)
+            mapInstance.options.crs = L.CRS.EPSG3857; 
+            mapInstance.eachLayer(layer => {
+                if (layer !== osmLayer && layer !== userMarker && layer !== accuracyCircle) {
+                    mapInstance.removeLayer(layer);
+                }
+            });
+            if (!mapInstance.hasLayer(osmLayer)) mapInstance.addLayer(osmLayer);
         }
+        
+        // 3. Reset Calibration State
+        calibrationPoints = { 
+            currentStep: 1, P_pixel: [], P_real: [], activeMarker: null, mapImage: null, imageDimensions: {},
+            H_matrix: null, H_inv: null, 
+            gpsPixelMarker: calibrationPoints.gpsPixelMarker, 
+            accuracyPixelCircle: calibrationPoints.accuracyPixelCircle, 
+            avgScaleFactor: 0 
+        };
+        
+        document.getElementById('confirmPointButton').style.display = 'none';
 
-        updateToggleButtons(); 
-        updateLiveDisplay(); 
-    };
-    
-    image.src = mapUrl;
+        // 4. Start/Restart continuous GPS tracking 
+        startGpsTracking(); 
+        
+        // 5. Load Settings Check
+        const hasLoadedSettings = loadCalibrationSettings();
+
+        document.getElementById('status-message').innerHTML = 'Loading image...';
+        
+        const image = new Image();
+        
+        image.onerror = function() {
+            // ERROR REPORTING: Failed image load
+            console.error("ERROR (Image Load): Image failed to load from URL:", mapUrl);
+            document.getElementById('status-message').innerHTML = 'Image loading failed.';
+            alert("❌ Error: Could not load the image from the provided URL. Check the URL and file access.");
+        };
+        
+        image.onload = function() {
+            try {
+                const width = this.width;
+                const height = this.height;
+
+                calibrationPoints.imageDimensions = {width, height};
+
+                const tempBounds = L.latLngBounds([10, -180], [80, 180]); 
+                
+                calibrationPoints.mapImage = L.imageOverlay(mapUrl, tempBounds, {
+                    opacity: 1.0, 
+                    attribution: 'Calibration Image Overlay',
+                    interactive: false 
+                });
+                
+                currentMapView = 'base'; 
+                
+                // Enable toggle and center buttons
+                document.getElementById('toggleBaseMap').disabled = false;
+                document.getElementById('toggleImageMap').disabled = false;
+                document.getElementById('centerGpsButton').disabled = false; 
+
+                if (hasLoadedSettings) {
+                    runLoadedProjection();
+                } else {
+                    // START INTERACTIVE CALIBRATION FLOW
+                    document.getElementById('status-message').innerHTML = `Image loaded (${width}x${height}). Click on the map to set **P1 (Real-World)** point.`;
+                    mapInstance.on('click', handleMapClick); 
+                }
+
+                updateToggleButtons(); 
+                updateLiveDisplay(); 
+            } catch (e) {
+                // ERROR REPORTING: Failed during image onload processing
+                console.error("ERROR (Image Onload): Error occurred during image map setup.", e);
+                document.getElementById('status-message').innerHTML = "🚨 **CRITICAL ERROR** during map setup.";
+            }
+        };
+        
+        image.src = mapUrl;
+    } catch (e) {
+        // CRITICAL ERROR REPORTING: Failed map initialization
+        console.error("CRITICAL ERROR: Failed to initialize map and listeners.", e);
+        document.getElementById('status-message').innerHTML = "🚨 **CRITICAL ERROR: Map initialization failed.** Check console for details.";
+    }
 }
 
 // -----------------------------------------------------------------
-// --- FINAL EVENT ATTACHMENTS (DOM Ready Fix applied here) ---
+// --- FINAL EVENT ATTACHMENTS (DOM Ready) ---
 // -----------------------------------------------------------------
 
 document.addEventListener('DOMContentLoaded', (event) => {
-    const startBtn = document.getElementById('startCalibrationButton');
-    const mapUrlField = document.getElementById('mapUrl');
-    
-    // Initial status check before the map is even initialized
-    loadCalibrationSettings();
+    try {
+        const startBtn = document.getElementById('startCalibrationButton');
+        const mapUrlField = document.getElementById('mapUrl');
+        
+        // Initial status check before the map is even initialized
+        loadCalibrationSettings();
 
-    if (startBtn) {
-        startBtn.addEventListener('click', function() {
-            const currentMapUrl = mapUrlField.value.trim();
-            if (!currentMapUrl) {
-                alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
-                return; 
-            }
-            // Start the initialization process, which handles saved settings internally
-            initializeMapAndListeners(currentMapUrl);
-        });
+        if (startBtn) {
+            startBtn.addEventListener('click', function() {
+                try {
+                    const currentMapUrl = mapUrlField.value.trim();
+                    if (!currentMapUrl) {
+                        alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
+                        return; 
+                    }
+                    // Start the initialization process, which handles saved settings internally
+                    initializeMapAndListeners(currentMapUrl);
+                } catch (e) {
+                    // ERROR REPORTING: Failed button click handler
+                    console.error("ERROR (Start Button): Failed to process Start Calibration click.", e);
+                    alert("🚨 An unexpected error occurred when starting calibration. Check console.");
+                }
+            });
+        }
+    } catch (e) {
+        // CRITICAL ERROR REPORTING: Failed DOMContentLoaded setup
+        console.error("CRITICAL ERROR: Failed during DOM content load setup.", e);
     }
 });
