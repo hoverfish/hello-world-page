@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maprika Clone V2: Interactive Calibration</title>
+    <title>Maprika Clone V2.10: Interactive Calibration</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     
@@ -12,11 +12,15 @@
 <body>
 
     <div class="container">
-        <h1>Maprika-Style GPS Overlay (V2)</h1>
+        <h1>Maprika-Style GPS Overlay (V2.10)</h1>
         <p>Use the **Interactive Calibration** to visually match the map corners.</p>
 
         <label for="mapUrl">Map Image URL (JPG/PNG):</label>
-        <input type="url" id="mapUrl" value="https://raw.githubusercontent.com/hoverfish/hello-world-page/refs/heads/main/27-ideas-to-improve-davis-square-v0-ct27i71tqznf1.png" required>
+        <input type="url" 
+               id="mapUrl" 
+               value="https://raw.githubusercontent.com/hoverfish/hello-world-page/refs/heads/main/27-ideas-to-improve-davis-square-v0-ct27i71tqznf1.png"
+               placeholder="e.g., https://example.com/map.jpg" 
+               required>
         
         <h3>Calibration Setup:</h3>
         <div id="status-message" style="min-height: 20px; font-weight: bold; margin-bottom: 10px;">
