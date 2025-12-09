@@ -19,15 +19,134 @@ let calibrationPoints = {
     imageDimensions: {}  
 };
 
-// --- GEOMETRY UTILITY FUNCTIONS (Unchanged) ---
-function calculateHomographyMatrix(P_pixel, P_real) { /* ... */ }
-function projectPoint(H, x, y) { /* ... */ }
+// --- GEOMETRY UTILITY FUNCTIONS ---
 
-// --- LIVE DISPLAY & GPS FUNCTIONS (Unchanged) ---
-function updateLiveDisplay() { /* ... */ }
-function updateControlPointInfo() { /* ... */ }
-function centerMapOnGps() { /* ... */ }
-function saveCurrentViewState() { /* ... */ }
+function calculateHomographyMatrix(P_pixel, P_real) {
+    const A = [];
+    const B = [];
+    for (let i = 0; i < 4; i++) {
+        const x_p = P_pixel[i].x;
+        const y_p = P_pixel[i].y;
+        const x_r = P_real[i].lng;
+        const y_r = P_real[i].lat;
+
+        A.push([x_p, y_p, 1, 0, 0, 0, -x_r * x_p, -x_r * y_p]);
+        B.push(x_r);
+        A.push([0, 0, 0, x_p, y_p, 1, -y_r * x_p, -y_r * y_p]);
+        B.push(y_r);
+    }
+    const h_params = numeric.solve(A, B);
+    const H = [
+        [h_params[0], h_params[1], h_params[2]],
+        [h_params[3], h_params[4], h_params[5]],
+        [h_params[6], h_params[7], 1]
+    ];
+    return H;
+}
+
+function projectPoint(H, x, y) {
+    const p = [x, y, 1];
+    const p_prime = numeric.dot(H, p);
+    const w = p_prime[2];
+    const x_prime = p_prime[0] / w;
+    const y_prime = p_prime[1] / w;
+    return [x_prime, y_prime];
+}
+
+// --- LIVE DISPLAY & GPS FUNCTIONS ---
+
+function updateLiveDisplay() {
+    // CRITICAL NULL CHECK: Prevents crash if called before map is initialized
+    if (!mapInstance) return; 
+
+    // Feature 1: Zoom Level Display
+    document.getElementById('zoomDisplay').textContent = mapInstance.getZoom();
+
+    // Feature 2: Center Coordinates Display
+    const center = mapInstance.getCenter();
+    const mapType = (mapInstance.options.crs === L.CRS.EPSG3857) ? 'Lat/Lon' : 'Pixel (Y/X)';
+    
+    let coordText;
+    if (mapInstance.options.crs === L.CRS.EPSG3857) {
+        coordText = `Lat: ${center.lat.toFixed(6)}, Lon: ${center.lng.toFixed(6)}`;
+    } else {
+        coordText = `Y: ${center.lat.toFixed(0)}, X: ${center.lng.toFixed(0)}`;
+    }
+    document.getElementById('coordDisplay').textContent = `Center (${mapType}): ${coordText}`;
+    
+    updateControlPointInfo();
+}
+
+function updateControlPointInfo() {
+    if (!mapInstance) return; 
+    
+    let info = [];
+    for (let i = 0; i < calibrationPoints.P_real.length; i++) {
+        const pR = calibrationPoints.P_real[i];
+        const pP = calibrationPoints.P_pixel[i];
+        
+        let pR_text = pR ? `(Lon: ${pR.lng.toFixed(4)}, Lat: ${pR.lat.toFixed(4)})` : 'N/A';
+        let pP_text = pP ? `(X: ${pP.x.toFixed(0)}, Y: ${pP.y.toFixed(0)})` : 'N/A';
+        
+        info.push(`P${i + 1}: Real ${pR_text} / Pixel ${pP_text}`);
+    }
+    
+    let currentStepText = `P${calibrationPoints.currentStep}: Collecting ${currentMapView === 'base' ? 'Real' : 'Pixel'}`;
+    
+    document.getElementById('controlPointInfo').innerHTML = 
+        [currentStepText, ...info].join('<br>');
+}
+
+function centerMapOnGps() {
+    if (!navigator.geolocation) {
+        alert("Geolocation is not supported by your browser.");
+        return;
+    }
+    
+    if (currentMapView !== 'base') {
+        alert("Please switch to the Base Map to use GPS centering.");
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            const currentLatLng = [position.coords.latitude, position.coords.longitude];
+            const accuracy = position.coords.accuracy;
+
+            mapInstance.setView(currentLatLng, mapInstance.getZoom() > 15 ? mapInstance.getZoom() : 15);
+
+            const markerIcon = L.divIcon({className: 'gps-marker-icon', html: '📍'});
+            
+            if (!userMarker) {
+                userMarker = L.marker(currentLatLng, { icon: markerIcon }).addTo(mapInstance).bringToFront();
+                accuracyCircle = L.circle(currentLatLng, { radius: accuracy, color: '#3080ff', fillColor: '#3080ff', fillOpacity: 0.2, weight: 1 }).addTo(mapInstance);
+            } else {
+                userMarker.setLatLng(currentLatLng).bringToFront();
+                accuracyCircle.setLatLng(currentLatLng).setRadius(accuracy);
+            }
+        },
+        (error) => {
+            console.error("Geolocation Error:", error);
+            alert("Could not retrieve current GPS location. Ensure location services are enabled.");
+        },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    );
+}
+
+function saveCurrentViewState() {
+    if (!mapInstance) return;
+
+    if (mapInstance.options.crs === L.CRS.EPSG3857) {
+        const center = mapInstance.getCenter();
+        if (center.lat > -90 && center.lat < 90) {
+            baseMapViewState.center = center;
+            baseMapViewState.zoom = mapInstance.getZoom();
+        }
+    } else if (mapInstance.options.crs === L.CRS.Simple) {
+        imageMapViewState.center = mapInstance.getCenter();
+        imageMapViewState.zoom = mapInstance.getZoom();
+    }
+}
 
 
 // --- MAP VIEW TOGGLING LOGIC (HARD RESET IMPLEMENTED) ---
@@ -126,13 +245,91 @@ function toggleToImageMap() {
 }
 
 
-// --- CALIBRATION PHASE FUNCTIONS (Unchanged) ---
-function handleMapClick(e) { /* ... */ }
-function confirmCurrentPoint() { /* ... */ }
-function runFinalProjection() { /* ... */ } 
+// --- CALIBRATION PHASE FUNCTIONS ---
+
+function handleMapClick(e) {
+    const step = calibrationPoints.currentStep;
+    
+    if (calibrationPoints.activeMarker) return;
+    mapInstance.off('click', handleMapClick); 
+
+    const iconHtml = `<div class="pinpoint-marker"><label>P${step}</label></div>`;
+    
+    const newMarker = L.marker(e.latlng, {
+        draggable: true,
+        title: `P${step}`,
+        icon: L.divIcon({className: 'pinpoint-marker', html: iconHtml})
+    }).addTo(mapInstance);
+
+    calibrationPoints.activeMarker = newMarker;
+
+    newMarker.on('dragend', function() {
+        document.getElementById('status-message').innerHTML = `P${step} position updated. Click **Confirm Point** to finalize.`;
+    });
+    
+    document.getElementById('status-message').innerHTML = `P${step} set on the **${currentMapView === 'base' ? 'Base Map' : 'Image Map'}**. Drag the marker to adjust, then click **Confirm Point**.`;
+    document.getElementById('confirmPointButton').style.display = 'inline';
+    
+    newMarker.bringToFront(); 
+}
+
+function confirmCurrentPoint() {
+    const step = calibrationPoints.currentStep;
+    const marker = calibrationPoints.activeMarker;
+    if (!marker) return;
+
+    if (currentMapView === 'base') {
+        const finalLatLng = marker.getLatLng();
+        calibrationPoints.P_real.push(finalLatLng);
+        
+        mapInstance.removeLayer(marker); 
+        calibrationPoints.activeMarker = null;
+        
+        saveCurrentViewState();
+
+        toggleToImageMap(); 
+        document.getElementById('status-message').innerHTML = `**P${step} Real-World** confirmed. Click on the **Image Map** to set the corresponding pixel point.`;
+        
+        mapInstance.on('click', handleMapClick); 
+        
+    } else { // currentMapView === 'image'
+        const finalLatLng = marker.getLatLng(); 
+        
+        const mapBounds = calibrationPoints.mapImage.getBounds();
+        const pixelPoint = mapInstance.latLngToContainerPoint(finalLatLng);
+        
+        const imageTopLeftPixel = mapInstance.latLngToContainerPoint(mapBounds.getNorthWest());
+        
+        const x_px = pixelPoint.x - imageTopLeftPixel.x;
+        const y_px = pixelPoint.y - imageTopLeftPixel.y;
+        
+        calibrationPoints.P_pixel.push({x: x_px, y: y_px});
+        
+        mapInstance.removeLayer(marker); 
+        calibrationPoints.activeMarker = null;
+        document.getElementById('confirmPointButton').style.display = 'none';
+
+        saveCurrentViewState();
+
+        calibrationPoints.currentStep++;
+        
+        if (calibrationPoints.currentStep <= 4) {
+            toggleToBaseMap(); 
+            document.getElementById('status-message').innerHTML = `**P${step} Pixel** confirmed. Click on the **Base Map** to set **P${calibrationPoints.currentStep} Real-World** point.`;
+            mapInstance.on('click', handleMapClick); 
+        } else {
+            document.getElementById('status-message').innerHTML = 'Calibration complete! Calculating projection...';
+            // runFinalProjection(); 
+        }
+    }
+    
+    updateControlPointInfo(); 
+}
+
+function runFinalProjection() { /* ... */ }
 
 
-// --- MAIN EXECUTION AND SETUP PHASE (Atomic Initialization) ---
+// --- MAIN EXECUTION AND SETUP PHASE ---
 
 function initializeMapAndListeners(mapUrl) {
     // 1. Initialize map and layers
@@ -221,7 +418,7 @@ function initializeMapAndListeners(mapUrl) {
 }
 
 // -----------------------------------------------------------------
-// --- FINAL EVENT ATTACHMENTS (Only Start Button remains here) ---
+// --- FINAL EVENT ATTACHMENTS (Only Start Button remains here for global scope) ---
 // -----------------------------------------------------------------
 
 const startBtn = document.getElementById('startCalibrationButton');
@@ -235,5 +432,3 @@ if (startBtn) {
         initializeMapAndListeners(mapUrl);
     });
 }
-
-// NOTE: All other button attachments were moved into the image.onload success block.

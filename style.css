@@ -2,95 +2,97 @@ body {
     font-family: Arial, sans-serif;
     margin: 0;
     padding: 0;
-    background-color: #f4f4f9;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: #f4f4f4;
 }
 
 .container {
-    max-width: 900px;
-    margin: 20px auto;
     padding: 20px;
-    background-color: white;
-    box-shadow: 0 0 10px rgba(0,0,0,0.1);
-    border-radius: 8px;
-}
-
-#map { 
-    height: 600px; 
-    width: 100%;
-    margin-top: 20px;
-}
-
-input[type="url"] {
-    width: 100%;
-    padding: 8px;
+    width: 90%;
+    max-width: 800px;
+    background-color: #fff;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
     margin-bottom: 10px;
-    box-sizing: border-box;
+}
+
+#map {
+    height: 600px;
+    width: 90%;
+    max-width: 800px;
+    margin-bottom: 20px;
+    border: 1px solid #ccc;
+    z-index: 1; /* Ensure map is behind container content */
+}
+
+input[type="url"], button {
+    padding: 10px;
+    margin: 5px 0;
     border: 1px solid #ccc;
     border-radius: 4px;
+    width: 100%;
+    box-sizing: border-box;
+    cursor: pointer;
 }
 
 button {
-    padding: 10px 20px;
     background-color: #007bff;
     color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 16px;
-    margin-top: 10px;
-    margin-right: 10px;
+    font-weight: bold;
+    transition: background-color 0.2s;
 }
 
-button:hover {
+button:hover:not([disabled]) {
     background-color: #0056b3;
 }
 
-/* Style for the active/inactive toggle buttons */
+button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+
+/* Toggle Buttons */
 .map-controls button {
-    background-color: #f0f0f0;
+    width: auto;
+    padding: 8px 15px;
+    margin-right: 5px;
+    background-color: #e0e0e0;
     color: #333;
-    border: 1px solid #ccc;
-    margin-top: 0;
+    border: 1px solid #aaa;
 }
+
 .map-controls button.active-toggle {
-    background-color: #28a745;
+    background-color: #007bff;
     color: white;
-    border-color: #28a745;
-}
-
-
-/* ----------------------------------------------------- */
-/* CUSTOM PINPOINT MARKER STYLES */
-/* ----------------------------------------------------- */
-.pinpoint-marker {
-    background: transparent;
-    border: none;
-    width: 20px !important;
-    height: 20px !important;
-    margin-left: -10px !important; /* Center the icon horizontally */
-    margin-top: -10px !important;  /* Center the icon vertically */
-}
-.pinpoint-marker::before {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    border: 2px solid red;
-    background: rgba(255, 0, 0, 0.4);
-    transform: translate(-50%, -50%);
-}
-.pinpoint-marker label {
-    position: absolute;
-    top: 25px; /* Position label below the icon */
-    left: 50%;
-    transform: translateX(-50%);
+    border: 1px solid #0056b3;
     font-weight: bold;
-    color: #000;
-    background-color: rgba(255, 255, 255, 0.8);
-    padding: 2px 5px;
-    border-radius: 3px;
-    white-space: nowrap;
+}
+
+/* Calibration Marker Style */
+.pinpoint-marker {
+    background-color: red;
+    border: 2px solid white;
+    color: white;
+    border-radius: 50%;
+    width: 25px;
+    height: 25px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    font-size: 14px;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+    cursor: grab;
+}
+
+/* GPS Marker (smaller, distinct) */
+.gps-marker-icon {
+    font-size: 20px;
+    text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+}
+
+.live-status-display p {
+    margin: 3px 0;
+    line-height: 1.4;
 }
