@@ -1,4 +1,4 @@
-// Maprika Clone Application - V2.12 (DOM Ready Fix for Start Button)
+// Maprika Clone Application - V2.13 (Average Scale Factor for Accuracy)
 
 // Global variables to hold the map instance and tracking markers
 let mapInstance = null;
@@ -22,7 +22,8 @@ let calibrationPoints = {
     H_matrix: null,       
     H_inv: null,          
     gpsPixelMarker: null,  
-    accuracyPixelCircle: null 
+    accuracyPixelCircle: null,
+    avgScaleFactor: 0 // Average scale in Meters per Pixel (M/px)
 };
 let gpsWatchId = null;     
 
@@ -38,6 +39,7 @@ function calculateHomographyMatrix(P_pixel, P_real) {
         const x_r = P_real[i].lng;
         const y_r = P_real[i].lat;
 
+        // Equations derived from the homography matrix for A*h = B
         A.push([x_p, y_p, 1, 0, 0, 0, -x_r * x_p, -x_r * y_p]);
         B.push(x_r);
         A.push([0, 0, 0, x_p, y_p, 1, -y_r * x_p, -y_r * y_p]);
@@ -53,16 +55,57 @@ function calculateHomographyMatrix(P_pixel, P_real) {
 }
 
 /**
+ * Calculates the average scale factor (Meters per Pixel) based on 
+ * distances between calibration points.
+ */
+function calculateAverageScaleFactor(P_pixel, P_real) {
+    if (P_pixel.length < 4 || P_real.length < 4) return 0;
+    
+    let totalScaleFactor = 0;
+    let count = 0;
+
+    // Iterate through all unique pairs of points (P1-P2, P1-P3, P1-P4, P2-P3, P2-P4, P3-P4)
+    for (let i = 0; i < P_pixel.length; i++) {
+        for (let j = i + 1; j < P_pixel.length; j++) {
+            // 1. Calculate Pixel Distance (in pixels)
+            const dx_px = P_pixel[i].x - P_pixel[j].x;
+            const dy_px = P_pixel[i].y - P_pixel[j].y;
+            const dist_px = Math.sqrt(dx_px * dx_px + dy_px * dy_px);
+
+            // 2. Calculate Geographic Distance (in meters)
+            // L.latLng.distanceTo() calculates distance in meters using geodesic path.
+            const p1_real = L.latLng(P_real[i].lat, P_real[i].lng);
+            const p2_real = L.latLng(P_real[j].lat, P_real[j].lng);
+            const dist_m = p1_real.distanceTo(p2_real);
+
+            if (dist_px > 0) {
+                // Scale factor is Meters per Pixel (M/px)
+                totalScaleFactor += dist_m / dist_px;
+                count++;
+            }
+        }
+    }
+    
+    return count > 0 ? totalScaleFactor / count : 0; // Avg Meters per Pixel
+}
+
+/**
  * Projects a geographic coordinate (Lon, Lat) to a pixel coordinate (X, Y) on the image.
  * Uses the Inverse Homography Matrix (H_inv).
  */
 function projectGpsToPixel(H_inv, lon, lat) {
     if (!H_inv) return null;
 
+    // Input vector for the matrix multiplication: [Lon, Lat, 1]
     const p = [lon, lat, 1];
+    
+    // Perform multiplication: H_inv * p
     const p_prime = numeric.dot(H_inv, p);
+    
+    // Normalize by the scaling factor (w)
     const w = p_prime[2];
     
+    // Avoid division by zero/near zero
     if (Math.abs(w) < 1e-6) {
         console.error("Homography division by zero/near-zero.");
         return null; 
@@ -131,6 +174,7 @@ function centerMapOnGps() {
             const currentLatLng = [position.coords.latitude, position.coords.longitude];
             const accuracy = position.coords.accuracy;
 
+            // Use current map zoom level
             mapInstance.setView(currentLatLng, mapInstance.getZoom());
 
             const markerIcon = L.divIcon({className: 'gps-marker-icon', html: '📍'});
@@ -345,11 +389,19 @@ function confirmCurrentPoint() {
 }
 
 function runFinalProjection() {
+    // 1. Calculate the Homography Matrix (Pixel -> Real)
     const H = calculateHomographyMatrix(calibrationPoints.P_pixel, calibrationPoints.P_real);
     calibrationPoints.H_matrix = H;
 
+    // 2. Calculate the Inverse Homography Matrix (Real -> Pixel)
     const H_inv = numeric.inv(H); 
     calibrationPoints.H_inv = H_inv;
+    
+    // 3. Calculate Average Scale Factor (Meters/Pixel)
+    calibrationPoints.avgScaleFactor = calculateAverageScaleFactor(
+        calibrationPoints.P_pixel, 
+        calibrationPoints.P_real
+    );
     
     document.getElementById('status-message').innerHTML = '✅ **Calibration Complete!** Homography computed. Starting GPS tracking on Image Map.';
     
@@ -376,7 +428,7 @@ function startGpsTracking() {
         navigator.geolocation.clearWatch(gpsWatchId);
     }
     
-    // NEW: Use a small dot icon
+    // Use a small dot icon
     const gpsDotIcon = L.divIcon({
         className: 'gps-dot-icon', 
         html: '',
@@ -387,6 +439,7 @@ function startGpsTracking() {
         (position) => {
             const lon = position.coords.longitude;
             const lat = position.coords.latitude;
+            const accuracy_real = position.coords.accuracy; // GPS accuracy in meters
             
             const pixelPoint = projectGpsToPixel(calibrationPoints.H_inv, lon, lat);
 
@@ -394,8 +447,17 @@ function startGpsTracking() {
 
             const pixelLatLng = L.latLng(pixelPoint.y, pixelPoint.x);
             
-            // Placeholder for pixel accuracy (50 pixels for visual size)
-            const accuracy_pixel = 50; 
+            // --- ACCURACY CALCULATION ---
+            let accuracy_pixel;
+            if (calibrationPoints.avgScaleFactor > 0) {
+                // Convert accuracy from meters to pixels using the average scale factor
+                accuracy_pixel = accuracy_real / calibrationPoints.avgScaleFactor;
+            } else {
+                // Fallback to a fixed visual size if scale calculation failed
+                accuracy_pixel = 50; 
+                console.warn("Average scale factor is zero. Using default accuracy radius (50px).");
+            }
+            // ---------------------------------
 
             if (!calibrationPoints.gpsPixelMarker) {
                 // Initialize marker (the dot)
@@ -464,7 +526,7 @@ function initializeMapAndListeners(mapUrl) {
     // Reset calibration state
     calibrationPoints = { 
         currentStep: 1, P_pixel: [], P_real: [], activeMarker: null, mapImage: null, imageDimensions: {},
-        H_matrix: null, H_inv: null, gpsPixelMarker: null, accuracyPixelCircle: null 
+        H_matrix: null, H_inv: null, gpsPixelMarker: null, accuracyPixelCircle: null, avgScaleFactor: 0 
     };
     if (gpsWatchId) {
         navigator.geolocation.clearWatch(gpsWatchId);
