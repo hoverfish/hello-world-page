@@ -52,6 +52,20 @@ button:disabled {
     cursor: not-allowed;
 }
 
+/* NEW: Small button style for "Clear Settings" */
+button.small-button {
+    width: auto;
+    padding: 4px 8px;
+    margin: 0;
+    font-size: 0.8em;
+    font-weight: normal;
+    background-color: #dc3545;
+}
+button.small-button:hover {
+    background-color: #c82333;
+}
+
+
 /* Toggle Buttons */
 .map-controls button {
     width: auto;
@@ -92,7 +106,7 @@ button:disabled {
     text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
 }
 
-/* Image Map GPS Marker (Small Dot) - NEW */
+/* Image Map GPS Marker (Small Dot) */
 .gps-dot-icon {
     background-color: #3080ff; /* Blue dot */
     border: 2px solid white;

@@ -1,10 +1,15 @@
-// Maprika Clone Application - V2.14 (Continuous BaseMap GPS Tracking & Zoom Level)
+// Maprika Clone Application - V2.15 (Persistence, BaseMap Fix, Live Placement)
 
 // Global variables to hold the map instance and tracking markers
 let mapInstance = null;
-let userMarker = null; // Marker for GPS on the Base Map (Real CRS)
-let accuracyCircle = null; 
 let osmLayer = null; 
+
+// Base Map GPS Markers (Real CRS)
+let userMarker = null; 
+let accuracyCircle = null; 
+const realMarkerIcon = L.divIcon({className: 'gps-marker-icon', html: '📍'});
+const gpsDotIcon = L.divIcon({className: 'gps-dot-icon', html: '', iconSize: [10, 10]}); 
+
 
 // New Globals to store independent view states
 let baseMapViewState = { center: [40.7, -74.0], zoom: 13 }; 
@@ -13,7 +18,7 @@ let imageMapViewState = { center: [0, 0], zoom: 0 };
 // Global state variables for Calibration
 let currentMapView = 'base'; // 'base' or 'image'
 let calibrationPoints = {
-    currentStep: 1,      // 1 to 4
+    currentStep: 1,      
     P_pixel: [],         
     P_real: [],          
     activeMarker: null,  
@@ -23,9 +28,67 @@ let calibrationPoints = {
     H_inv: null,          
     gpsPixelMarker: null,  
     accuracyPixelCircle: null,
-    avgScaleFactor: 0 // Average scale in Meters per Pixel (M/px)
+    avgScaleFactor: 0 
 };
 let gpsWatchId = null;     
+
+
+// --- PERSISTENCE FUNCTIONS ---
+
+function saveCalibrationSettings() {
+    try {
+        const settings = {
+            P_real: calibrationPoints.P_real,
+            P_pixel: calibrationPoints.P_pixel
+        };
+        localStorage.setItem('maprikaCalibrationSettings', JSON.stringify(settings));
+        
+        // Show the button to clear settings
+        document.getElementById('clearSettingsButton').style.display = 'inline';
+
+    } catch (e) {
+        console.error("Could not save settings to localStorage:", e);
+    }
+}
+
+function loadCalibrationSettings() {
+    try {
+        const settingsString = localStorage.getItem('maprikaCalibrationSettings');
+        if (settingsString) {
+            const settings = JSON.parse(settingsString);
+            if (settings.P_real && settings.P_real.length === 4 && settings.P_pixel && settings.P_pixel.length === 4) {
+                
+                // Convert plain objects back to L.LatLng objects
+                calibrationPoints.P_real = settings.P_real.map(p => L.latLng(p.lat, p.lng));
+                calibrationPoints.P_pixel = settings.P_pixel.map(p => ({x: p.lng, y: p.lat}));
+                
+                // Update status and show clear button
+                document.getElementById('status-message').innerHTML = '✅ **Saved calibration found!** Running projection... <span id="clearSettingsContainer"></span>';
+                document.getElementById('clearSettingsContainer').innerHTML = '<button id="clearSettingsButton" class="small-button">Clear Settings</button>';
+                
+                // Attach event listener for the new clear button
+                document.getElementById('clearSettingsButton').addEventListener('click', clearCalibrationSettings);
+
+                return true; 
+            }
+        }
+        document.getElementById('status-message').innerHTML = 'Enter Map URL above and click \'**Start Calibration**\'.';
+        return false;
+    } catch (e) {
+        console.error("Could not load settings from localStorage:", e);
+        return false;
+    }
+}
+
+function clearCalibrationSettings() {
+    localStorage.removeItem('maprikaCalibrationSettings');
+    
+    // Reset page to initial state
+    location.reload(); 
+    // If we wanted to reset without reloading:
+    // calibrationPoints = { ...reset object... };
+    // initializeMapAndListeners(document.getElementById('mapUrl').value.trim()); 
+}
 
 
 // --- GEOMETRY UTILITY FUNCTIONS ---
@@ -39,7 +102,6 @@ function calculateHomographyMatrix(P_pixel, P_real) {
         const x_r = P_real[i].lng;
         const y_r = P_real[i].lat;
 
-        // Equations derived from the homography matrix for A*h = B
         A.push([x_p, y_p, 1, 0, 0, 0, -x_r * x_p, -x_r * y_p]);
         B.push(x_r);
         A.push([0, 0, 0, x_p, y_p, 1, -y_r * x_p, -y_r * y_p]);
@@ -54,44 +116,32 @@ function calculateHomographyMatrix(P_pixel, P_real) {
     return H;
 }
 
-/**
- * Calculates the average scale factor (Meters per Pixel) based on 
- * distances between calibration points.
- */
 function calculateAverageScaleFactor(P_pixel, P_real) {
     if (P_pixel.length < 4 || P_real.length < 4) return 0;
     
     let totalScaleFactor = 0;
     let count = 0;
 
-    // Iterate through all unique pairs of points
     for (let i = 0; i < P_pixel.length; i++) {
         for (let j = i + 1; j < P_pixel.length; j++) {
-            // 1. Calculate Pixel Distance (in pixels)
             const dx_px = P_pixel[i].x - P_pixel[j].x;
             const dy_px = P_pixel[i].y - P_pixel[j].y;
             const dist_px = Math.sqrt(dx_px * dx_px + dy_px * dy_px);
 
-            // 2. Calculate Geographic Distance (in meters)
             const p1_real = L.latLng(P_real[i].lat, P_real[i].lng);
             const p2_real = L.latLng(P_real[j].lat, P_real[j].lng);
             const dist_m = p1_real.distanceTo(p2_real);
 
             if (dist_px > 0) {
-                // Scale factor is Meters per Pixel (M/px)
                 totalScaleFactor += dist_m / dist_px;
                 count++;
             }
         }
     }
     
-    return count > 0 ? totalScaleFactor / count : 0; // Avg Meters per Pixel
+    return count > 0 ? totalScaleFactor / count : 0; 
 }
 
-/**
- * Projects a geographic coordinate (Lon, Lat) to a pixel coordinate (X, Y) on the image.
- * Uses the Inverse Homography Matrix (H_inv).
- */
 function projectGpsToPixel(H_inv, lon, lat) {
     if (!H_inv) return null;
 
@@ -99,10 +149,8 @@ function projectGpsToPixel(H_inv, lon, lat) {
     const p_prime = numeric.dot(H_inv, p);
     const w = p_prime[2];
     
-    if (Math.abs(w) < 1e-6) {
-        console.error("Homography division by zero/near-zero.");
-        return null; 
-    }
+    if (Math.abs(w) < 1e-6) return null; 
+    
     const x_pixel = p_prime[0] / w;
     const y_pixel = p_prime[1] / w;
     
@@ -114,7 +162,7 @@ function projectGpsToPixel(H_inv, lon, lat) {
 
 function updateLiveDisplay() {
     if (!mapInstance) return; 
-    // ... (unchanged) ...
+
     document.getElementById('zoomDisplay').textContent = mapInstance.getZoom();
 
     const center = mapInstance.getCenter();
@@ -133,7 +181,7 @@ function updateLiveDisplay() {
 
 function updateControlPointInfo() {
     if (!mapInstance) return; 
-    // ... (unchanged) ...
+    
     let info = [];
     for (let i = 0; i < calibrationPoints.P_real.length; i++) {
         const pR = calibrationPoints.P_real[i];
@@ -145,13 +193,17 @@ function updateControlPointInfo() {
         info.push(`P${i + 1}: Real ${pR_text} / Pixel ${pP_text}`);
     }
     
-    let currentStepText = `P${calibrationPoints.currentStep}: Collecting ${currentMapView === 'base' ? 'Real' : 'Pixel'}`;
+    let currentStepText = '';
+    if (calibrationPoints.currentStep <= 4) {
+        currentStepText = `P${calibrationPoints.currentStep}: Collecting ${currentMapView === 'base' ? 'Real' : 'Pixel'}`;
+    } else if (calibrationPoints.H_inv) {
+        currentStepText = `✅ Calibration Complete! Scale: ${calibrationPoints.avgScaleFactor.toFixed(3)} M/px`;
+    }
     
     document.getElementById('controlPointInfo').innerHTML = 
         [currentStepText, ...info].join('<br>');
 }
 
-// REMOVED: function centerMapOnGps() - Its functionality is now handled by startGpsTracking
 function centerMapOnGps() {
     if (!navigator.geolocation) {
         alert("Geolocation is not supported by your browser.");
@@ -163,7 +215,6 @@ function centerMapOnGps() {
         return;
     }
 
-    // Use getCurrentPosition just for one-time centering
     navigator.geolocation.getCurrentPosition(
         (position) => {
             const currentLatLng = [position.coords.latitude, position.coords.longitude];
@@ -177,10 +228,9 @@ function centerMapOnGps() {
     );
 }
 
-
 function saveCurrentViewState() {
     if (!mapInstance) return;
-    // ... (unchanged) ...
+
     if (mapInstance.options.crs === L.CRS.EPSG3857) {
         const center = mapInstance.getCenter();
         if (center.lat > -90 && center.lat < 90) {
@@ -201,10 +251,12 @@ function updateToggleButtons() {
     const imgBtn = document.getElementById('toggleImageMap');
     const display = document.getElementById('activeMapDisplay');
 
-    // 1. Clear Map of ALL layers EXCEPT active marker and calibration points
+    // 1. Clear Map of ALL layers EXCEPT active marker
     mapInstance.eachLayer(layer => {
+        // Keep the active calibration marker, and the GPS markers IF they are not null
         if (layer !== calibrationPoints.activeMarker && 
-            !(layer instanceof L.Marker)) { 
+            layer !== userMarker && layer !== accuracyCircle &&
+            layer !== calibrationPoints.gpsPixelMarker && layer !== calibrationPoints.accuracyPixelCircle) { 
             mapInstance.removeLayer(layer);
         }
     });
@@ -216,9 +268,7 @@ function updateToggleButtons() {
         imgBtn.classList.remove('active-toggle');
         display.textContent = 'Active View: Base Map (Click to set Lat/Lon)';
         
-        // Base Map Layers: OSM, Real GPS Marker/Circle (Now added by startGpsTracking)
         if (osmLayer) mapInstance.addLayer(osmLayer);
-        
         if (gpsButton) gpsButton.disabled = false;
         
         // Show real GPS items on BaseMap
@@ -227,7 +277,7 @@ function updateToggleButtons() {
             mapInstance.addLayer(accuracyCircle);
             userMarker.bringToFront();
         }
-        // Remove projected GPS items from the map
+        // Hide projected GPS items
         if (calibrationPoints.gpsPixelMarker) mapInstance.removeLayer(calibrationPoints.gpsPixelMarker);
         if (calibrationPoints.accuracyPixelCircle) mapInstance.removeLayer(calibrationPoints.accuracyPixelCircle);
 
@@ -237,20 +287,17 @@ function updateToggleButtons() {
         imgBtn.classList.add('active-toggle');
         display.textContent = 'Active View: Image Map (Click to set Pixel X/Y)';
         
-        // Image Map Layers: Image Overlay, Projected GPS Dot/Circle
         if (calibrationPoints.mapImage) mapInstance.addLayer(calibrationPoints.mapImage);
-        
         if (gpsButton) gpsButton.disabled = true;
         
-        // Remove real GPS items from the map
+        // Hide real GPS items
         if (userMarker) mapInstance.removeLayer(userMarker);
         if (accuracyCircle) mapInstance.removeLayer(accuracyCircle);
         
-        // Add projected GPS items to the map (if tracking is active)
+        // Show projected GPS items (if tracking is active)
         if (calibrationPoints.gpsPixelMarker) mapInstance.addLayer(calibrationPoints.gpsPixelMarker);
         if (calibrationPoints.accuracyPixelCircle) mapInstance.addLayer(calibrationPoints.accuracyPixelCircle);
         if (calibrationPoints.gpsPixelMarker) calibrationPoints.gpsPixelMarker.bringToFront();
-
     }
     
     if (calibrationPoints.activeMarker) {
@@ -262,7 +309,7 @@ function updateToggleButtons() {
 
 function toggleToBaseMap() {
     if (currentMapView === 'base') return; 
-    // ... (unchanged) ...
+    
     saveCurrentViewState();
 
     mapInstance.options.crs = L.CRS.EPSG3857;
@@ -275,7 +322,7 @@ function toggleToBaseMap() {
 
 function toggleToImageMap() {
     if (currentMapView === 'image') return;
-    // ... (unchanged) ...
+    
     saveCurrentViewState();
     
     mapInstance.options.crs = L.CRS.Simple;
@@ -302,7 +349,6 @@ function toggleToImageMap() {
 // --- CALIBRATION PHASE FUNCTIONS ---
 
 function handleMapClick(e) {
-    // ... (unchanged) ...
     const step = calibrationPoints.currentStep;
     
     if (calibrationPoints.activeMarker) return;
@@ -317,6 +363,18 @@ function handleMapClick(e) {
     }).addTo(mapInstance);
 
     calibrationPoints.activeMarker = newMarker;
+    
+    // --- LIVE PLACEMENT UPDATE ---
+    newMarker.on('drag', function(event) {
+        const latlng = event.target.getLatLng();
+        let statusText;
+        if (currentMapView === 'base') {
+            statusText = `P${step} Current: Lat: ${latlng.lat.toFixed(6)}, Lon: ${latlng.lng.toFixed(6)}`;
+        } else {
+            statusText = `P${step} Current: Y: ${latlng.lat.toFixed(0)}, X: ${latlng.lng.toFixed(0)}`;
+        }
+        document.getElementById('status-message').innerHTML = statusText;
+    });
 
     newMarker.on('dragend', function() {
         document.getElementById('status-message').innerHTML = `P${step} position updated. Click **Confirm Point** to finalize.`;
@@ -329,7 +387,6 @@ function handleMapClick(e) {
 }
 
 function confirmCurrentPoint() {
-    // ... (unchanged) ...
     const step = calibrationPoints.currentStep;
     const marker = calibrationPoints.activeMarker;
     if (!marker) return;
@@ -351,6 +408,7 @@ function confirmCurrentPoint() {
     } else { // currentMapView === 'image'
         const finalLatLng = marker.getLatLng(); 
         
+        // Pixel coordinates are stored as {x: Lng, y: Lat}
         const x_px = finalLatLng.lng;
         const y_px = finalLatLng.lat;
         
@@ -392,18 +450,56 @@ function runFinalProjection() {
         calibrationPoints.P_real
     );
     
-    document.getElementById('status-message').innerHTML = '✅ **Calibration Complete!** Homography computed. GPS tracking is active.';
+    // 4. Save settings for next session
+    saveCalibrationSettings();
     
-    // GPS tracking is already active via startGpsTracking() called from initializeMapAndListeners, 
-    // but we can ensure the latest H_inv is used.
-    // If the tracking needs to be restarted for new matrix, uncomment below, but current watchPosition 
-    // uses the latest H_inv on each position update anyway. We'll leave it as is.
+    document.getElementById('status-message').innerHTML = `✅ **Calibration Complete!** Scale: ${calibrationPoints.avgScaleFactor.toFixed(3)} M/px. <span id="clearSettingsContainer"><button id="clearSettingsButton" class="small-button">Clear Settings</button></span>`;
+    document.getElementById('clearSettingsButton').addEventListener('click', clearCalibrationSettings);
     
     document.getElementById('confirmPointButton').style.display = 'none';
+    
+    // Remove the temporary map click listener used for calibration
+    mapInstance.off('click', handleMapClick); 
+    
+    // Ensure Image Map is ready if switched
+    if (currentMapView === 'image' && calibrationPoints.mapImage) {
+        const {width, height} = calibrationPoints.imageDimensions;
+        calibrationPoints.mapImage.setBounds([[0, 0], [height, width]]);
+    }
+}
+
+/**
+ * Runs the projection using loaded calibration settings, skipping interactive steps.
+ */
+function runLoadedProjection() {
+    // 1. Calculate the Homography Matrix (Pixel -> Real)
+    const H = calculateHomographyMatrix(calibrationPoints.P_pixel, calibrationPoints.P_real);
+    calibrationPoints.H_matrix = H;
+
+    // 2. Calculate the Inverse Homography Matrix (Real -> Pixel)
+    const H_inv = numeric.inv(H); 
+    calibrationPoints.H_inv = H_inv;
+    
+    // 3. Calculate Average Scale Factor (Meters/Pixel)
+    calibrationPoints.avgScaleFactor = calculateAverageScaleFactor(
+        calibrationPoints.P_pixel, 
+        calibrationPoints.P_real
+    );
+
+    document.getElementById('startCalibrationButton').disabled = true; // Disable start button
+
+    // Enable toggle buttons immediately
+    document.getElementById('toggleBaseMap').disabled = false;
+    document.getElementById('toggleImageMap').disabled = false;
+    document.getElementById('centerGpsButton').disabled = false; 
+
+    // Update status to reflect loaded state
+    document.getElementById('status-message').innerHTML = `✅ **Calibration Loaded!** Scale: ${calibrationPoints.avgScaleFactor.toFixed(3)} M/px. <span id="clearSettingsContainer"><button id="clearSettingsButton" class="small-button">Clear Settings</button></span>`;
+    document.getElementById('clearSettingsButton').addEventListener('click', clearCalibrationSettings);
 }
 
 
-// --- CONTINUOUS GPS TRACKING (Updated for BaseMap tracking) ---
+// --- CONTINUOUS GPS TRACKING (Unified BaseMap & ImageMap) ---
 
 function startGpsTracking() {
     if (!navigator.geolocation) {
@@ -412,38 +508,27 @@ function startGpsTracking() {
     }
 
     if (gpsWatchId) {
-        // Clear previous watch if it exists
         navigator.geolocation.clearWatch(gpsWatchId);
     }
     
-    // Icon for Base Map (Real CRS)
-    const realMarkerIcon = L.divIcon({className: 'gps-marker-icon', html: '📍'});
-    
-    // Icon for Image Map (Simple CRS)
-    const gpsDotIcon = L.divIcon({
-        className: 'gps-dot-icon', 
-        html: '',
-        iconSize: [10, 10]
-    }); 
-
     gpsWatchId = navigator.geolocation.watchPosition(
         (position) => {
             const lon = position.coords.longitude;
             const lat = position.coords.latitude;
-            const accuracy_real = position.coords.accuracy; // GPS accuracy in meters
+            const accuracy_real = position.coords.accuracy; 
             const currentLatLng = L.latLng(lat, lon);
 
             // --- 1. UPDATE BASE MAP (Real CRS) MARKERS ---
+            // Marker initialization is now done here to use the first valid position
             if (!userMarker) {
-                userMarker = L.marker(currentLatLng, { icon: realMarkerIcon }).addTo(mapInstance).bringToFront();
+                userMarker = L.marker(currentLatLng, { icon: realMarkerIcon }).addTo(mapInstance);
                 accuracyCircle = L.circle(currentLatLng, { radius: accuracy_real, color: '#3080ff', fillColor: '#3080ff', fillOpacity: 0.2, weight: 1 }).addTo(mapInstance);
             } else {
                 userMarker.setLatLng(currentLatLng).bringToFront();
                 accuracyCircle.setLatLng(currentLatLng).setRadius(accuracy_real);
             }
 
-
-            // --- 2. UPDATE IMAGE MAP (Simple CRS) MARKERS (Only if calibration is complete) ---
+            // --- 2. UPDATE IMAGE MAP (Simple CRS) MARKERS ---
             if (calibrationPoints.H_inv) {
                 const pixelPoint = projectGpsToPixel(calibrationPoints.H_inv, lon, lat);
                 if (pixelPoint) {
@@ -457,23 +542,22 @@ function startGpsTracking() {
                     }
 
                     if (!calibrationPoints.gpsPixelMarker) {
-                        calibrationPoints.gpsPixelMarker = L.marker(pixelLatLng, { icon: gpsDotIcon }).addTo(mapInstance);
+                        calibrationPoints.gpsPixelMarker = L.marker(pixelLatLng, { icon: gpsDotIcon });
                         calibrationPoints.accuracyPixelCircle = L.circle(pixelLatLng, { 
                             radius: accuracy_pixel, 
                             color: '#3080ff', 
                             fillColor: '#3080ff', 
                             fillOpacity: 0.2, 
                             weight: 1 
-                        }).addTo(mapInstance);
-
+                        });
                     } else {
                         calibrationPoints.gpsPixelMarker.setLatLng(pixelLatLng);
                         calibrationPoints.accuracyPixelCircle.setLatLng(pixelLatLng).setRadius(accuracy_pixel); 
                     }
-
-                    // Visibility will be handled by updateToggleButtons()
                 }
             }
+            // Ensure visibility is correct after update
+            updateToggleButtons(); 
         },
         (error) => {
             console.error("Geolocation Tracking Error:", error);
@@ -489,38 +573,40 @@ function initializeMapAndListeners(mapUrl) {
     if (!mapInstance) {
         mapInstance = L.map('map', {
             minZoom: -4, 
-            maxZoom: 20, // INCREASED MAX ZOOM TO 20
+            maxZoom: 20, 
         }).setView(baseMapViewState.center, baseMapViewState.zoom);
-        osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
+        
+        // FIX 1: Change to Esri WorldStreetMap for higher zoom levels
+        osmLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012',
+            maxZoom: 20 // Set max zoom here for the tile layer itself
+        });
         mapInstance.addLayer(osmLayer);
         
         mapInstance.on('moveend', saveCurrentViewState);
         mapInstance.on('zoomend', saveCurrentViewState);
-        
         mapInstance.on('moveend', updateLiveDisplay);
         mapInstance.on('zoomend', updateLiveDisplay);
     } else {
         mapInstance.options.crs = L.CRS.EPSG3857; 
-        mapInstance.options.maxZoom = 20; // Ensure max zoom is updated even if map exists
+        mapInstance.options.maxZoom = 20; 
         mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
         if (osmLayer) mapInstance.addLayer(osmLayer);
     }
     
-    // Clear all existing tracking and calibration markers on start
-    if (userMarker) mapInstance.removeLayer(userMarker);
-    if (accuracyCircle) mapInstance.removeLayer(accuracyCircle);
-    if (calibrationPoints.gpsPixelMarker) mapInstance.removeLayer(calibrationPoints.gpsPixelMarker);
-    if (calibrationPoints.accuracyPixelCircle) mapInstance.removeLayer(calibrationPoints.accuracyPixelCircle);
-
     // Reset calibration state
     calibrationPoints = { 
         currentStep: 1, P_pixel: [], P_real: [], activeMarker: null, mapImage: null, imageDimensions: {},
         H_matrix: null, H_inv: null, gpsPixelMarker: null, accuracyPixelCircle: null, avgScaleFactor: 0 
     };
-    if (gpsWatchId) {
-        navigator.geolocation.clearWatch(gpsWatchId);
-        gpsWatchId = null;
-    }
+
+    document.getElementById('confirmPointButton').style.display = 'none';
+
+    // Start continuous GPS tracking immediately (This will initialize userMarker/accuracyCircle)
+    startGpsTracking(); 
+    
+    // Check for saved settings before loading image
+    const hasLoadedSettings = loadCalibrationSettings();
 
     document.getElementById('status-message').innerHTML = 'Loading image...';
     
@@ -529,7 +615,6 @@ function initializeMapAndListeners(mapUrl) {
     image.onerror = function() {
         document.getElementById('status-message').innerHTML = 'Image loading failed.';
         alert("❌ Error: Could not load the image from the provided URL. Please check the link and ensure the image is publicly accessible (JPG/PNG).");
-        if (mapInstance) mapInstance.eachLayer(layer => mapInstance.removeLayer(layer));
     };
     
     image.onload = function() {
@@ -546,21 +631,9 @@ function initializeMapAndListeners(mapUrl) {
             interactive: false 
         });
         
-        document.getElementById('status-message').innerHTML = `Image loaded (${width}x${height}). Starting GPS tracking. Click on the map to set **P1 (Real-World)** point.`;
-        
         currentMapView = 'base'; 
-        updateToggleButtons(); 
-        mapInstance.on('click', handleMapClick); 
-        document.getElementById('confirmPointButton').style.display = 'none';
-
-        // START GPS TRACKING IMMEDIATELY
-        startGpsTracking();
-
-        // ATOMIC BUTTON ENABLE/ATTACHMENT
-        document.getElementById('toggleBaseMap').disabled = false;
-        document.getElementById('toggleImageMap').disabled = false;
-        document.getElementById('centerGpsButton').disabled = false; 
         
+        // ATOMIC BUTTON ENABLE/ATTACHMENT
         const centerBtn = document.getElementById('centerGpsButton');
         if (centerBtn) centerBtn.addEventListener('click', centerMapOnGps);
 
@@ -573,6 +646,17 @@ function initializeMapAndListeners(mapUrl) {
         const toggleImageBtn = document.getElementById('toggleImageMap');
         if (toggleImageBtn) toggleImageBtn.addEventListener('click', toggleToImageMap);
 
+        if (hasLoadedSettings) {
+             runLoadedProjection();
+        } else {
+             document.getElementById('status-message').innerHTML = `Image loaded (${width}x${height}). Click on the map to set **P1 (Real-World)** point.`;
+             mapInstance.on('click', handleMapClick); 
+             document.getElementById('toggleBaseMap').disabled = false;
+             document.getElementById('toggleImageMap').disabled = false;
+             document.getElementById('centerGpsButton').disabled = false; 
+        }
+
+        updateToggleButtons(); 
         updateLiveDisplay(); 
     };
     
@@ -586,14 +670,21 @@ function initializeMapAndListeners(mapUrl) {
 document.addEventListener('DOMContentLoaded', (event) => {
     const startBtn = document.getElementById('startCalibrationButton');
     
+    // Initialize map with a default URL immediately on DOM load if mapUrl is present
+    const mapUrl = document.getElementById('mapUrl').value.trim();
+    if (mapUrl) {
+        initializeMapAndListeners(mapUrl); 
+    }
+    
     if (startBtn) {
         startBtn.addEventListener('click', function() {
-            const mapUrl = document.getElementById('mapUrl').value.trim();
-            if (!mapUrl) {
+            const currentMapUrl = document.getElementById('mapUrl').value.trim();
+            if (!currentMapUrl) {
                 alert("🚨 Error: Please enter a Map Image URL before starting calibration.");
                 return; 
             }
-            initializeMapAndListeners(mapUrl);
+            // If the map is already initialized, just restart the calibration with the new URL
+            initializeMapAndListeners(currentMapUrl);
         });
     }
 });

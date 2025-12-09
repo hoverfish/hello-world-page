@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maprika Clone V2.14: Interactive Calibration</title>
+    <title>Maprika Clone V2.15: Persistence and Live Placement</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     
@@ -12,7 +12,7 @@
 <body>
 
     <div class="container">
-        <h1>Maprika-Style GPS Overlay (V2.14)</h1>
+        <h1>Maprika-Style GPS Overlay (V2.15)</h1>
         <p>Use the **Interactive Calibration** to visually match the map corners.</p>
 
         <label for="mapUrl">Map Image URL (JPG/PNG):</label>
@@ -22,14 +22,17 @@
                placeholder="e.g., https://example.com/map.jpg" 
                required>
         
-        <h3>Calibration Setup:</h3>
+        <hr>
+
+        <h3>Calibration Status:</h3>
         <div id="status-message" style="min-height: 20px; font-weight: bold; margin-bottom: 10px;">
             <p>Enter Map URL above and click '**Start Calibration**'.</p>
         </div>
 
         <button id="startCalibrationButton">Start Interactive Calibration</button>
         <button id="confirmPointButton" style="display: none;">Confirm Point</button>
-        <hr style="margin-top: 15px;">
+        
+        <hr>
         
         <h3>Live Data & Controls</h3>
         <div class="live-status-display" style="margin-bottom: 10px; font-size: 0.9em;">
@@ -49,10 +52,4 @@
 
     <div id="map"></div> 
 
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/numeric/numeric-1.2.6.min.js"></script>
-    
-    <script src="app.js"></script> 
-    
-</body>
-</html>
+    <script src="
