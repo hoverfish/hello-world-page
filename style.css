@@ -23,7 +23,7 @@ body {
     max-width: 800px;
     margin-bottom: 20px;
     border: 1px solid #ccc;
-    z-index: 1; /* Ensure map is behind container content */
+    z-index: 1; 
 }
 
 input[type="url"], button {
@@ -86,10 +86,23 @@ button:disabled {
     cursor: grab;
 }
 
-/* GPS Marker (smaller, distinct) */
+/* Base Map GPS Marker (Compass Pin) */
 .gps-marker-icon {
     font-size: 20px;
     text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+}
+
+/* Image Map GPS Marker (Small Dot) - NEW */
+.gps-dot-icon {
+    background-color: #3080ff; /* Blue dot */
+    border: 2px solid white;
+    border-radius: 50%;
+    width: 10px;
+    height: 10px;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+    /* Centers the dot on the exact location */
+    margin-left: -5px; 
+    margin-top: -5px;
 }
 
 .live-status-display p {
